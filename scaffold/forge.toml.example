@@ -1,0 +1,23 @@
+[forge]
+# ── Telegram ──
+telegram_bot_token = ""
+telegram_chat_id = ""
+
+# ── 비용 예산 (분) ──
+max_sprint_minutes = 180
+max_generator_minutes = 120
+
+# ── Langfuse (하네스 메타 추적, 선택) ──
+langfuse_public_key = ""
+langfuse_secret_key = ""
+langfuse_host = "https://cloud.langfuse.com"
+
+# ── Claude Code CLI 턴 제한 ──
+planner_max_turns = 15
+planner_review_max_turns = 10
+contract_max_turns = 12
+evaluator_max_turns = 20
+
+# ── Playwright ──
+playwright_enabled = true
+playwright_timeout_seconds = 600
