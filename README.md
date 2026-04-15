@@ -522,12 +522,5 @@ uv run ruff format src/ tests/
 **Q. 체크포인트가 오래되어 이어쓰기가 이상하다**
 - `rm artifacts/.harness-checkpoint.json`으로 초기화하거나 `forge status`로 현재 Phase 확인 후 수동 처리.
 
----
-
-## 관련 문서
-
-- [THE_FORGE-implementation-spec-v2_1.md](THE_FORGE-implementation-spec-v2_1.md) — v2.1 구현 기획서 (크로스 플랫폼, 소유권 다이어그램)
-- [the-forge-spec-v2.0.md](the-forge-spec-v2.0.md) — v2.0 스펙 (Python 전면 전환)
-- [prancy-spinning-peacock.md](prancy-spinning-peacock.md) — 설계 근거 및 원본 하네스 비교 노트
 
 
