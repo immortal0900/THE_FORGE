@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+dist/
+build/
+
+# uv
+.uv-cache/
+
+# IDE
+.vscode/
+.idea/
+
+# 환경/비밀
+.env
+forge.toml
+
+# forge runtime
+artifacts/spec.md
+artifacts/plan-review.md
+artifacts/sprint-contract.md
+artifacts/progress-log.md
+artifacts/qa-report.md
+artifacts/harness-cost-log.txt
+artifacts/.harness-checkpoint
+artifacts/.backup/
+artifacts/specs/
+artifacts/decisions/
+artifacts/.approval-signal
+artifacts/.skip-signal
+artifacts/.continue-signal
+artifacts/.exit-signal
+prancy-spinning-peacock.md
+# 기획서 (로컬)
+harness-implementation-spec-v1_4.md
+THE_FORGE-implementation-spec-v2_1.md
+the-forge-spec-v2.0.md
+
+# Claude Code 로컬 권한
+.claude/settings.local.json
+.claude/settings.json
