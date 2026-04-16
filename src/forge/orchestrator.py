@@ -485,29 +485,38 @@ def run_cycle(
                 cp.advance(Phase.CONTRACT_DONE, "contract approved")
                 cp.save(paths.checkpoint_file)
 
-            # Phase 3: Generator (interactive)
+            # Phase 3: Generator (claude -p, 자동 실행)
             if cp.should_run(Phase.GENERATING):
-                cp.advance(Phase.GENERATING, "generator interactive session")
+                cp.advance(Phase.GENERATING, "generator running")
                 cp.save(paths.checkpoint_file)
                 notify(config, "generator_start", f"Sprint {sprint_num} Generator 세션 시작.", project_name=paths.project_name)
-                with sprint_tracer.span("generator", mode="interactive"):
+                with sprint_tracer.span("generator", mode="claude-p") as info:
                     try:
                         claude_cli = shutil.which("claude") or "claude"
                         initial_prompt = (
-                            f"Sprint {sprint_num} 구현을 시작하라. "
-                            f"artifacts/sprint-contract.md를 정독하고 체크박스 순서대로 구현·커밋하라. "
-                            f"각 완료 항목은 `[x]`로 표시하고, 중요 결정은 artifacts/decisions/에 기록하라. "
-                            f"전체 완료 시 artifacts/progress-log.md 최상단에 스프린트 결과 블록을 추가한 뒤 종료하라."
+                            f"Sprint {sprint_num} 세션을 시작하라. "
+                            f"CLAUDE.md의 세션 시작 절차를 따르되, "
+                            f"artifacts/qa-report.md가 존재하면 FAIL 항목부터 우선 수정하라. "
+                            f"그 외에는 artifacts/sprint-contract.md 체크박스 순서대로 구현하고, "
+                            f"각 기능 완성 시 `feat: ...` 형식으로 커밋 + 체크박스 `[x]`. "
+                            f"중요 결정은 artifacts/decisions/decision-NNN.md, "
+                            f"세션 종료 시 artifacts/progress-log.md 최상단에 결과 블록 추가."
                         )
-                        subprocess.run(
-                            [claude_cli, "--permission-mode", "bypassPermissions", initial_prompt],
+                        result = subprocess.run(
+                            [claude_cli, "-p",
+                             "--max-turns", str(config.generator_max_turns),
+                             "--permission-mode", "bypassPermissions",
+                             initial_prompt],
                             cwd=str(paths.project_root),
-                            stdin=sys.stdin,
-                            stdout=sys.stdout,
-                            stderr=sys.stderr,
+                            capture_output=True, text=True,
+                            encoding="utf-8", errors="replace",
+                            timeout=config.max_generator_minutes * 60,
                         )
+                        info["stdout"] = result.stdout or ""
                     except KeyboardInterrupt:
                         pass
+                    except subprocess.TimeoutExpired:
+                        notify(config, "warning", f"Generator 시간 초과 ({config.max_generator_minutes}분).", project_name=paths.project_name)
                     except FileNotFoundError:
                         notify(config, "error", "claude CLI를 찾을 수 없습니다.", project_name=paths.project_name)
                         return 3

@@ -34,6 +34,7 @@ class ForgeConfig(BaseSettings):
     planner_review_max_turns: int = 10
     contract_max_turns: int = 12
     evaluator_max_turns: int = 20
+    generator_max_turns: int = 180
 
     playwright_enabled: bool = True
     playwright_timeout_seconds: int = 600

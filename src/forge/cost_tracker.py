@@ -173,11 +173,13 @@ class SprintTracer:
             timestamp = datetime.now().isoformat(timespec="seconds")
             status = "ERROR" if error else "OK"
 
-            # v2.3: 토큰 추출
-            if mode == "interactive":
-                tokens = _extract_tokens_from_jsonl(start, time.time())
-            else:
-                tokens = _extract_tokens_from_stdout(info.get("stdout", ""))
+            # 토큰 추출: jsonl이 가장 정확 (claude -p / interactive 모두 기록됨).
+            # stdout 파싱은 fallback으로만 사용.
+            tokens = _extract_tokens_from_jsonl(start, time.time())
+            if tokens["input"] == 0 and tokens["output"] == 0:
+                stdout_tokens = _extract_tokens_from_stdout(info.get("stdout", ""))
+                if stdout_tokens["input"] or stdout_tokens["output"]:
+                    tokens = stdout_tokens
 
             info["duration_seconds"] = duration
             info["tokens_input"] = tokens.get("input", 0)
