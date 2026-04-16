@@ -1,4 +1,8 @@
-"""forge.toml → Pydantic Settings 로드 + ProjectPaths."""
+"""설정 로드 + ProjectPaths.
+
+v2.2: .env(비밀) + pyproject.toml [tool.forge](공유) + forge.toml(레거시 하위호환).
+우선순위: 환경변수 (FORGE_*) > .env > forge.toml [forge] > pyproject.toml [tool.forge] > 기본값.
+"""
 
 from __future__ import annotations
 
@@ -16,16 +20,16 @@ class ForgeConfig(BaseSettings):
         extra="ignore",
     )
 
+    # ── 비밀 (.env에서 로드) ──
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
-
-    max_sprint_minutes: int = 180
-    max_generator_minutes: int = 120
-
     langfuse_public_key: str = ""
     langfuse_secret_key: str = ""
     langfuse_host: str = "https://cloud.langfuse.com"
 
+    # ── 공유 설정 (pyproject.toml [tool.forge]에서 로드) ──
+    max_sprint_minutes: int = 180
+    max_generator_minutes: int = 120
     planner_max_turns: int = 15
     planner_review_max_turns: int = 10
     contract_max_turns: int = 12
@@ -33,6 +37,11 @@ class ForgeConfig(BaseSettings):
 
     playwright_enabled: bool = True
     playwright_timeout_seconds: int = 600
+
+    # ── v2.3: 자동 루프 안전장치 ──
+    max_total_minutes: int = 1440
+    max_consecutive_fails: int = 3
+    max_total_sprints: int = 20
 
     @property
     def telegram_enabled(self) -> bool:
@@ -44,20 +53,38 @@ class ForgeConfig(BaseSettings):
 
     @classmethod
     def load(cls, project_root: Path) -> "ForgeConfig":
-        """환경변수 우선, 그 뒤 forge.toml에서 비어있지 않은 값만 덮어씀.
+        """환경변수 우선, 그 뒤 TOML에서 비어있지 않은 값만 덮어씀.
 
-        우선순위: 환경변수 (FORGE_*) > project_root/.env > forge.toml 비-기본값 > 기본값.
+        우선순위: 환경변수 (FORGE_*) > .env > forge.toml [forge] > pyproject.toml [tool.forge] > 기본값.
         """
         env_file = Path(project_root) / ".env"
         base = cls(_env_file=str(env_file) if env_file.exists() else None)
-        config_path = project_root / "forge.toml"
-        if not config_path.exists():
-            return base
+
+        # pyproject.toml [tool.forge] (v2.2 신규) → forge.toml [forge] (레거시) 순으로 읽기
+        overrides: dict = {}
+        pyproject_path = project_root / "pyproject.toml"
+        forge_toml_path = project_root / "forge.toml"
 
         import tomllib
 
-        data = tomllib.loads(config_path.read_text(encoding="utf-8"))
-        overrides = data.get("forge", {})
+        if pyproject_path.exists():
+            try:
+                data = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
+                overrides.update(data.get("tool", {}).get("forge", {}))
+            except Exception:
+                pass
+
+        if forge_toml_path.exists():
+            try:
+                data = tomllib.loads(forge_toml_path.read_text(encoding="utf-8"))
+                # forge.toml 값이 pyproject.toml보다 우선 (레거시 호환)
+                overrides.update(data.get("forge", {}))
+            except Exception:
+                pass
+
+        if not overrides:
+            return base
+
         field_defaults = {
             name: f.default for name, f in cls.model_fields.items()
         }
@@ -74,11 +101,11 @@ class ForgeConfig(BaseSettings):
             if key not in cls.model_fields:
                 continue
             if key in env_set_fields:
-                continue  # 환경변수 우선
+                continue
             if value == field_defaults.get(key):
-                continue  # 기본값과 같으면 덮어쓰지 않음 (env 값 보존)
+                continue
             if isinstance(value, str) and value == "":
-                continue  # 빈 문자열은 무시 (env 값 보존)
+                continue
             merged[key] = value
         return cls(**merged)
 
@@ -105,6 +132,8 @@ class ProjectPaths:
         self.skip_signal = self.artifacts / ".skip-signal"
         self.continue_signal = self.artifacts / ".continue-signal"
         self.exit_signal = self.artifacts / ".exit-signal"
+        self.eval_signal = self.artifacts / ".eval-signal"
+        self.stop_signal = self.artifacts / ".stop-signal"
 
         self.claude_settings = self.project_root / ".claude" / "settings.json"
         self.claude_md = self.project_root / "CLAUDE.md"

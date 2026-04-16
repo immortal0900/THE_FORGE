@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import threading
-from pathlib import Path
 from typing import Optional
 
 import httpx
@@ -77,17 +76,23 @@ class TelegramReceiver:
     def _handle_command(self, text: str) -> None:
         cmd = text.split(maxsplit=1)[0].lower()
         self.paths.ensure_artifacts()
-        if cmd in ("/resume", "/approve"):
+        if cmd in ("/resume", "/approve", "/계속", "/진행"):
             self.paths.approval_signal.write_text("resume\n", encoding="utf-8")
-        elif cmd == "/skip":
+        elif cmd in ("/skip", "/스킵", "/무시"):
             self.paths.skip_signal.write_text("skip\n", encoding="utf-8")
             self.paths.approval_signal.write_text("skip\n", encoding="utf-8")
         elif cmd == "/continue":
             self.paths.continue_signal.write_text("continue\n", encoding="utf-8")
-        elif cmd == "/exit":
+        elif cmd in ("/exit", "/종료"):
             self.paths.exit_signal.write_text("exit\n", encoding="utf-8")
-        elif cmd == "/status":
+        elif cmd in ("/eval", "/재평가"):
+            self.paths.eval_signal.write_text("eval\n", encoding="utf-8")
+        elif cmd in ("/stop", "/중단"):
+            self.paths.stop_signal.write_text("stop\n", encoding="utf-8")
+        elif cmd in ("/status", "/상태"):
             self._send_status()
+        elif cmd in ("/help", "/도움"):
+            self._send_help()
 
     def _handle_file(self, doc: dict, caption: str) -> None:
         """caption이 'artifacts/...' 형식이면 해당 경로에 저장 (traversal 검증)."""
@@ -128,13 +133,29 @@ class TelegramReceiver:
 
     def _send_status(self) -> None:
         from ..checkpoint import Checkpoint
+        from ..cost_tracker import parse_cost_log
 
         cp = Checkpoint.load(self.paths.checkpoint_file)
+        total_mins = parse_cost_log(self.paths.cost_log)
         self._reply(
             f"📊 [{self.paths.project_name}]\n"
             f"Phase: {cp.phase.name}\n"
+            f"Sprint: #{self.paths.current_sprint()}\n"
+            f"누적 시간: {total_mins:.0f}분\n"
             f"Detail: {cp.detail}\n"
             f"Updated: {cp.timestamp}"
+        )
+
+    def _send_help(self) -> None:
+        self._reply(
+            "📖 사용 가능한 명령어:\n"
+            "/resume — 다음 단계 진행\n"
+            "/eval — Evaluator만 재실행 (FAIL 시)\n"
+            "/stop — 자동 루프 중단\n"
+            "/skip — 현재 단계 건너뜀\n"
+            "/status — 현재 상태 조회\n"
+            "/exit — 즉시 종료\n"
+            "/help — 이 도움말"
         )
 
     def _reply(self, text: str) -> None:

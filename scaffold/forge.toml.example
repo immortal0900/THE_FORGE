@@ -1,3 +1,7 @@
+# ⚠️ DEPRECATED: v2.2부터 forge.toml 대신 .env + pyproject.toml [tool.forge]를 사용합니다.
+# 이 파일은 하위 호환성을 위해 유지되지만, 새 프로젝트에서는 forge init을 실행하세요.
+# 비밀(토큰, 키)은 .env에, 공유 설정은 pyproject.toml [tool.forge]에 저장하세요.
+
 [forge]
 # ── Telegram ──
 telegram_bot_token = ""

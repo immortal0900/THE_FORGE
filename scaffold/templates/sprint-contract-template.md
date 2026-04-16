@@ -1,3 +1,10 @@
+---
+sprint_number: 1
+has_next_sprint: true
+estimated_remaining_sprints: 0
+next_sprint_preview: "(다음 스프린트 예정 작업 2-5줄 요약)"
+---
+
 # Sprint {N} Contract
 
 **목표:** (한 줄 요약)

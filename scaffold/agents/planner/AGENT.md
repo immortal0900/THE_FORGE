@@ -48,6 +48,18 @@ artifacts/spec.md 파일의 존재 여부와 사용자 지시에 따라 모드�
 1. spec.md, specs/*, progress-log.md, sprint-*-done.md를 읽어라
 2. templates/sprint-contract-template.md 형식을 따라라
 3. artifacts/sprint-contract.md에 다음 스프린트 범위를 작성 (P0 3-5개, 각 항목 검증 기준 포함)
+4. **반드시 YAML frontmatter를 포함하라** (v2.3 필수):
+   ```yaml
+   ---
+   sprint_number: 3
+   has_next_sprint: true
+   estimated_remaining_sprints: 2
+   next_sprint_preview: |
+     다음 스프린트 예정 작업 (2-5줄 서술)
+   ---
+   ```
+   - `has_next_sprint: false`이면 이것이 마지막 스프린트
+   - frontmatter가 없으면 오케스트레이터가 프로젝트 완료를 판단할 수 없다
 
 ## 절대 금지
 - 코드를 작성하지 마라

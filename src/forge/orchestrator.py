@@ -1,8 +1,9 @@
-"""5-Phase 하네스 메인 루프."""
+"""5-Phase 하네스 메인 루프 — v2.3 자동 스프린트 루프."""
 
 from __future__ import annotations
 
 import platform
+import re
 import subprocess
 import sys
 import time
@@ -13,9 +14,12 @@ from .agents import evaluator as ev
 from .agents import planner as pl
 from .checkpoint import Checkpoint, Phase
 from .config import ForgeConfig, ProjectPaths
-from .cost_tracker import SprintTracer
+from .cost_tracker import SprintTracer, parse_cost_log
 from .telegram.notifier import notify
 from .telegram.receiver import TelegramReceiver
+
+
+# ── stdin 감지 ──────────────────────────────────────────────────────────────
 
 
 def _stdin_ready(timeout: float = 2.0) -> bool:
@@ -37,6 +41,9 @@ def _stdin_ready(timeout: float = 2.0) -> bool:
         sys.stdin.readline()
         return True
     return False
+
+
+# ── 승인 대기 ───────────────────────────────────────────────────────────────
 
 
 def wait_for_approval(paths: ProjectPaths, timeout: float = 600.0) -> str:
@@ -65,6 +72,36 @@ def wait_for_approval(paths: ProjectPaths, timeout: float = 600.0) -> str:
     return "timeout"
 
 
+def wait_for_approval_or_stop(paths: ProjectPaths, timeout: float = 1800.0) -> str:
+    """v2.3: /resume, /eval, /stop 시그널 대기. 반환: resume/eval/stop/timeout."""
+    for sig in (
+        paths.approval_signal,
+        paths.skip_signal,
+        paths.exit_signal,
+        paths.continue_signal,
+        paths.eval_signal,
+        paths.stop_signal,
+    ):
+        sig.unlink(missing_ok=True)
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if paths.stop_signal.exists():
+            return "stop"
+        if paths.exit_signal.exists():
+            return "stop"
+        if paths.eval_signal.exists():
+            return "eval"
+        if paths.approval_signal.exists():
+            return "resume"
+        if _stdin_ready(timeout=1.0):
+            return "resume"
+        time.sleep(0.3)
+    return "timeout"
+
+
+# ── 유틸리티 ────────────────────────────────────────────────────────────────
+
+
 def _invalidate_stale_review(paths: ProjectPaths) -> None:
     """spec.md가 plan-review.md보다 새로우면 리뷰 무효화."""
     if paths.spec.exists() and paths.plan_review.exists():
@@ -72,13 +109,241 @@ def _invalidate_stale_review(paths: ProjectPaths) -> None:
             paths.plan_review.unlink(missing_ok=True)
 
 
+def _parse_frontmatter(paths: ProjectPaths) -> dict:
+    """sprint-contract.md YAML frontmatter를 dict로 파싱."""
+    if not paths.sprint_contract.exists():
+        return {}
+    text = paths.sprint_contract.read_text(encoding="utf-8", errors="replace")
+    m = re.match(r"^---\s*\n(.*?)\n---", text, re.DOTALL)
+    if not m:
+        return {}
+    fm: dict = {}
+    for line in m.group(1).splitlines():
+        if ":" in line and not line.startswith(" "):
+            key, _, val = line.partition(":")
+            fm[key.strip()] = val.strip()
+    return fm
+
+
+def _parse_has_next_sprint(paths: ProjectPaths) -> bool:
+    """sprint-contract.md YAML frontmatter에서 has_next_sprint 읽기."""
+    fm = _parse_frontmatter(paths)
+    if not fm:
+        return True  # frontmatter 없으면 다음 스프린트 있다고 가정
+    return fm.get("has_next_sprint", "true").lower() != "false"
+
+
+def _archive_sprint(sprint_num: int, paths: ProjectPaths) -> None:
+    """sprint-N-done.md 아카이브 생성."""
+    archive = paths.sprint_done_path(sprint_num)
+    try:
+        qa_content = (
+            paths.qa_report.read_text(encoding="utf-8", errors="replace")
+            if paths.qa_report.exists()
+            else ""
+        )
+        archive.write_text(
+            f"# Sprint {sprint_num} — DONE\n\n## qa-report.md\n\n{qa_content}",
+            encoding="utf-8",
+        )
+    except OSError:
+        pass
+
+
+def _extract_checked_items(paths: ProjectPaths) -> list[str]:
+    """sprint-contract.md에서 [x] 체크된 항목 목록 추출."""
+    if not paths.sprint_contract.exists():
+        return []
+    text = paths.sprint_contract.read_text(encoding="utf-8", errors="replace")
+    items = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("- [x]") or stripped.startswith("- [X]"):
+            items.append(stripped[5:].strip().split("—")[0].strip())
+    return items
+
+
+def _extract_next_sprint_preview(paths: ProjectPaths) -> str:
+    """sprint-contract.md frontmatter에서 next_sprint_preview 추출."""
+    if not paths.sprint_contract.exists():
+        return ""
+    text = paths.sprint_contract.read_text(encoding="utf-8", errors="replace")
+    m = re.match(r"^---\s*\n(.*?)\n---", text, re.DOTALL)
+    if not m:
+        return ""
+    fm_text = m.group(1)
+    # next_sprint_preview: | 형식이거나 한 줄 형식
+    preview_match = re.search(r"next_sprint_preview:\s*\|?\s*\n((?:\s+.+\n?)*)", fm_text)
+    if preview_match:
+        return preview_match.group(1).strip()
+    # 한 줄 형식
+    preview_match = re.search(r"next_sprint_preview:\s*(.+)", fm_text)
+    if preview_match:
+        val = preview_match.group(1).strip().strip('"').strip("'")
+        return val
+    return ""
+
+
+def _build_sprint_history(paths: ProjectPaths) -> str:
+    """sprint-N-done.md 목록에서 스프린트별 히스토리 문자열 생성."""
+    if not paths.artifacts.exists():
+        return ""
+    pattern = re.compile(r"sprint-(\d+)-done\.md")
+    done_files = sorted(
+        [p for p in paths.artifacts.iterdir() if pattern.match(p.name)],
+        key=lambda p: int(pattern.match(p.name).group(1)),
+    )
+    if not done_files:
+        return ""
+    lines = []
+    for f in done_files:
+        num = pattern.match(f.name).group(1)
+        lines.append(f"  ✅ Sprint {num} PASS")
+    return "\n".join(lines)
+
+
+_SCORE_RE = re.compile(r"([\w\s가-힣]+):\s*(\d+)/10")
+
+
+def _extract_scores_from_qa_report(paths: ProjectPaths) -> dict[str, int]:
+    """qa-report.md에서 'X: N/10' 패턴 추출."""
+    scores: dict[str, int] = {}
+    if not paths.qa_report.exists():
+        return scores
+    text = paths.qa_report.read_text(encoding="utf-8", errors="replace")
+    for m in _SCORE_RE.finditer(text):
+        scores[m.group(1).strip()] = int(m.group(2))
+    return scores
+
+
+# ── 알림 헬퍼 (v2.3) ───────────────────────────────────────────────────────
+
+
+def _notify_pass_with_next(
+    config: ForgeConfig,
+    tracer: SprintTracer,
+    sprint_num: int,
+    paths: ProjectPaths,
+) -> None:
+    """PASS + 다음 스프린트 알림 (완료 내용 + 다음 계획 포함)."""
+    scores = _extract_scores_from_qa_report(paths)
+    totals = tracer.sprint_totals()
+    total_mins = parse_cost_log(paths.cost_log)
+    score_lines = "\n".join(f"• {k}: {v}/10" for k, v in scores.items())
+    dur = totals["duration_seconds"] / 60
+
+    # 완료 내용 (체크박스)
+    checked = _extract_checked_items(paths)
+    completed_section = ""
+    if checked:
+        completed_lines = "\n".join(f"• {item}" for item in checked)
+        completed_section = f"\n완료 내용:\n{completed_lines}\n"
+
+    # 다음 스프린트 정보 (frontmatter)
+    fm = _parse_frontmatter(paths)
+    next_preview = _extract_next_sprint_preview(paths)
+    estimated = fm.get("estimated_remaining_sprints", "?")
+    next_section = ""
+    if next_preview:
+        next_section = (
+            f"\n📋 Sprint {sprint_num + 1} 계획\n\n"
+            f"예정 작업:\n{next_preview}\n\n"
+            f"남은 스프린트: {estimated}개\n"
+        )
+
+    msg = (
+        f"Sprint {sprint_num} 완료\n\n"
+        f"점수:\n{score_lines}\n"
+        f"{completed_section}\n"
+        f"─────────────────\n\n"
+        f"📊 비용\n"
+        f"• 이번 스프린트: {dur:.0f}분 | in {totals['tokens_input']:,} / out {totals['tokens_output']:,}\n"
+        f"• 누적: {total_mins:.0f}분\n\n"
+        f"─────────────────\n"
+        f"{next_section}\n"
+        f"/resume — 계속 진행\n"
+        f"/stop — 여기서 중단\n"
+        f"/status — 상세 상태"
+    )
+    notify(config, "sprint_pass_next", msg, file_path=paths.qa_report, project_name=paths.project_name)
+
+
+def _notify_fail_with_options(
+    config: ForgeConfig,
+    tracer: SprintTracer,
+    sprint_num: int,
+    paths: ProjectPaths,
+    consecutive: int,
+) -> None:
+    """FAIL + 선택지 알림."""
+    scores = _extract_scores_from_qa_report(paths)
+    totals = tracer.sprint_totals()
+    total_mins = parse_cost_log(paths.cost_log)
+    score_lines = "\n".join(f"• {k}: {v}/10" for k, v in scores.items())
+    dur = totals["duration_seconds"] / 60
+    msg = (
+        f"Sprint {sprint_num} FAILED\n\n"
+        f"점수:\n{score_lines}\n\n"
+        f"─────────────────\n\n"
+        f"📊 비용\n"
+        f"• 이번 스프린트: {dur:.0f}분 | in {totals['tokens_input']:,} / out {totals['tokens_output']:,}\n"
+        f"• 누적: {total_mins:.0f}분\n\n"
+        f"⚠️ 연속 FAIL: {consecutive}/{config.max_consecutive_fails}\n\n"
+        f"─────────────────\n\n"
+        f"/resume — Generator 재진입\n"
+        f"/eval — Evaluator 재실행\n"
+        f"/stop — 여기서 중단"
+    )
+    notify(config, "qa_fail", msg, file_path=paths.qa_report, project_name=paths.project_name)
+
+
+def _notify_project_complete(
+    config: ForgeConfig,
+    tracer: SprintTracer,
+    paths: ProjectPaths,
+    total_sprints: int,
+) -> None:
+    """프로젝트 완료 알림 (스프린트별 히스토리 + 캐시 히트 포함)."""
+    totals = tracer.sprint_totals()
+    total_mins = parse_cost_log(paths.cost_log)
+
+    # 스프린트별 히스토리
+    history = _build_sprint_history(paths)
+    history_section = f"\n전체 결과:\n{history}\n" if history else ""
+
+    msg = (
+        f"프로젝트 완료!\n\n"
+        f"총 스프린트: {total_sprints}개\n"
+        f"{history_section}\n"
+        f"📊 전체 비용\n"
+        f"• 총 소요 시간: {total_mins:.0f}분\n"
+        f"• 총 사용 토큰:\n"
+        f"  - 입력: {totals['tokens_input']:,}\n"
+        f"  - 출력: {totals['tokens_output']:,}\n"
+        f"  - 캐시 히트: {totals['tokens_cache']:,}\n\n"
+        f"spec.md의 모든 스프린트가 구현 완료되었습니다.\n"
+        f"추가 작업이 필요하면 spec.md에 새 스프린트 추가 후 forge run."
+    )
+    notify(config, "project_complete", msg, project_name=paths.project_name)
+
+
+# ── 메인 사이클 ─────────────────────────────────────────────────────────────
+
+
 def run_cycle(
     request: Optional[str] = None,
     plan_file: Optional[Path] = None,
     config: Optional[ForgeConfig] = None,
     project_root: Optional[Path] = None,
+    from_phase: Optional[Phase] = None,
+    single_sprint: bool = False,
+    max_sprints: Optional[int] = None,
 ) -> int:
-    """메인 사이클. 종료 코드 반환."""
+    """자동 스프린트 루프.
+
+    기본 동작 (single_sprint=False): 프로젝트 완료까지 스프린트 자동 진행.
+    v2.2 호환 (single_sprint=True): 1 스프린트만 실행 후 종료.
+    """
     project_root = Path(project_root or Path.cwd()).resolve()
     config = config or ForgeConfig.load(project_root)
     paths = ProjectPaths(project_root)
@@ -92,8 +357,13 @@ def run_cycle(
             )
 
     cp = Checkpoint.load(paths.checkpoint_file)
-    sprint_num = paths.current_sprint()
-    tracer = SprintTracer(config, sprint_num, paths.project_name, paths.cost_log)
+
+    # v2.2: --from 처리
+    if from_phase is not None:
+        target_prev = Phase(from_phase - 1) if from_phase > Phase.NONE else Phase.NONE
+        cp = Checkpoint(phase=target_prev, detail=f"forced from {from_phase.name}")
+        cp.save(paths.checkpoint_file)
+
     receiver = TelegramReceiver(config, paths)
     receiver.start()
 
@@ -101,23 +371,22 @@ def run_cycle(
     try:
         _invalidate_stale_review(paths)
 
-        # Phase 1: Planning
+        # ── Phase 1: Planning (프로젝트당 1회) ──
         if cp.should_run(Phase.PLANNING):
+            sprint_num = paths.current_sprint()
+            tracer = SprintTracer(config, sprint_num, paths.project_name, paths.cost_log)
             cp.advance(Phase.PLANNING, "planner running")
             cp.save(paths.checkpoint_file)
-            with tracer.span("planner"):
+            with tracer.span("planner") as info:
                 if not paths.spec.exists():
                     if not request:
-                        notify(
-                            config,
-                            "error",
-                            "spec.md가 없고 요청도 없습니다.",
-                            project_name=paths.project_name,
-                        )
+                        notify(config, "error", "spec.md가 없고 요청도 없습니다.", project_name=paths.project_name)
                         return 2
-                    pl.run_generate(request, config, paths)
+                    result = pl.run_generate(request, config, paths)
+                    info["stdout"] = result.stdout or ""
                 else:
-                    pl.run_review(config, paths)
+                    result = pl.run_review(config, paths)
+                    info["stdout"] = result.stdout or ""
 
             status = pl.plan_review_status(paths)
             notify(
@@ -138,144 +407,165 @@ def run_cycle(
 
             cp.advance(Phase.PLANNING_DONE, "planning approved")
             cp.save(paths.checkpoint_file)
+            tracer.finalize()
 
-        # Phase 2: Sprint Contract
-        if cp.should_run(Phase.CONTRACT):
-            cp.advance(Phase.CONTRACT, "contract generating")
-            cp.save(paths.checkpoint_file)
-            with tracer.span("contract"):
-                pl.run_contract(sprint_num, config, paths)
+        # ── 스프린트 자동 루프 (v2.3 핵심) ──
+        sprints_run = 0
+        consecutive_fails = 0
 
-            notify(
-                config,
-                "sprint_contract",
-                f"Sprint {sprint_num} contract 생성됨.",
-                file_path=paths.sprint_contract if paths.sprint_contract.exists() else None,
-                project_name=paths.project_name,
-            )
-            signal = wait_for_approval(paths, timeout=600)
-            if signal == "exit":
-                return 0
-            cp.advance(Phase.CONTRACT_DONE, "contract approved")
-            cp.save(paths.checkpoint_file)
+        while True:
+            sprint_num = paths.current_sprint()
+            sprint_tracer = SprintTracer(config, sprint_num, paths.project_name, paths.cost_log)
 
-        # Phase 3: Generator (interactive)
-        if cp.should_run(Phase.GENERATING):
-            cp.advance(Phase.GENERATING, "generator interactive session")
-            cp.save(paths.checkpoint_file)
-            notify(
-                config,
-                "generator_start",
-                f"Sprint {sprint_num} Generator 세션 시작.",
-                project_name=paths.project_name,
-            )
-            with tracer.span("generator", mode="interactive"):
-                try:
-                    subprocess.run(
-                        ["claude"],
-                        cwd=str(paths.project_root),
-                        stdin=sys.stdin,
-                        stdout=sys.stdout,
-                        stderr=sys.stderr,
-                    )
-                except KeyboardInterrupt:
-                    pass
-                except FileNotFoundError:
+            # 안전장치 체크
+            effective_max = max_sprints if max_sprints is not None else config.max_total_sprints
+            if sprints_run >= effective_max:
+                notify(config, "auto_stop", f"최대 스프린트 수 {effective_max} 도달 — 자동 중단", project_name=paths.project_name)
+                break
+
+            if consecutive_fails >= config.max_consecutive_fails:
+                notify(config, "auto_stop", f"{config.max_consecutive_fails}회 연속 FAIL — 자동 중단", file_path=paths.qa_report, project_name=paths.project_name)
+                break
+
+            total_mins = parse_cost_log(paths.cost_log)
+            if total_mins > config.max_total_minutes:
+                notify(config, "budget_exceeded", f"누적 {total_mins:.0f}분 > {config.max_total_minutes}분 — 자동 중단", file_path=paths.cost_log, project_name=paths.project_name)
+                break
+
+            # Phase 2: Sprint Contract
+            if cp.should_run(Phase.CONTRACT):
+                cp.advance(Phase.CONTRACT, "contract generating")
+                cp.save(paths.checkpoint_file)
+                with sprint_tracer.span("contract") as info:
+                    result = pl.run_contract(sprint_num, config, paths)
+                    info["stdout"] = result.stdout or ""
+
+                # 첫 Sprint Contract만 승인 대기
+                if sprint_num == 1:
                     notify(
                         config,
-                        "error",
-                        "claude CLI를 찾을 수 없습니다.",
+                        "sprint_contract",
+                        f"Sprint {sprint_num} contract 생성됨.",
+                        file_path=paths.sprint_contract if paths.sprint_contract.exists() else None,
                         project_name=paths.project_name,
                     )
-                    return 3
-            notify(
-                config,
-                "generator_end",
-                "Generator 세션 종료. Evaluator로 넘어갑니다.",
-                file_path=paths.progress_log if paths.progress_log.exists() else None,
-                project_name=paths.project_name,
-            )
-            cp.advance(Phase.GENERATING_DONE, "generator finished")
-            cp.save(paths.checkpoint_file)
+                    signal = wait_for_approval(paths, timeout=600)
+                    if signal == "exit":
+                        return 0
 
-        # Phase 4: Evaluator
-        if cp.should_run(Phase.EVALUATING):
-            cp.advance(Phase.EVALUATING, "evaluator running")
-            cp.save(paths.checkpoint_file)
-            try:
-                with tracer.span("evaluator"):
-                    ev.run_evaluate(config, paths)
-            except Exception as e:
+                cp.advance(Phase.CONTRACT_DONE, "contract approved")
+                cp.save(paths.checkpoint_file)
+
+            # Phase 3: Generator (interactive)
+            if cp.should_run(Phase.GENERATING):
+                cp.advance(Phase.GENERATING, "generator interactive session")
+                cp.save(paths.checkpoint_file)
+                notify(config, "generator_start", f"Sprint {sprint_num} Generator 세션 시작.", project_name=paths.project_name)
+                with sprint_tracer.span("generator", mode="interactive"):
+                    try:
+                        subprocess.run(
+                            ["claude"],
+                            cwd=str(paths.project_root),
+                            stdin=sys.stdin,
+                            stdout=sys.stdout,
+                            stderr=sys.stderr,
+                        )
+                    except KeyboardInterrupt:
+                        pass
+                    except FileNotFoundError:
+                        notify(config, "error", "claude CLI를 찾을 수 없습니다.", project_name=paths.project_name)
+                        return 3
                 notify(
-                    config,
-                    "error",
-                    f"Evaluator 실행 중 예외: {e}",
+                    config, "generator_end", "Generator 세션 종료.",
+                    file_path=paths.progress_log if paths.progress_log.exists() else None,
                     project_name=paths.project_name,
                 )
-            cp.advance(Phase.EVALUATING_DONE, "evaluation complete")
-            cp.save(paths.checkpoint_file)
+                cp.advance(Phase.GENERATING_DONE, "generator finished")
+                cp.save(paths.checkpoint_file)
 
-        # Phase 5: 결과 판단
-        exit_code = _handle_results(config, paths, cp, sprint_num)
+            # Phase 4: Evaluator
+            if cp.should_run(Phase.EVALUATING):
+                cp.advance(Phase.EVALUATING, "evaluator running")
+                cp.save(paths.checkpoint_file)
+                try:
+                    with sprint_tracer.span("evaluator") as info:
+                        result = ev.run_evaluate(config, paths)
+                        info["stdout"] = result.stdout or ""
+                except Exception as e:
+                    notify(config, "error", f"Evaluator 실행 중 예외: {e}", project_name=paths.project_name)
+                cp.advance(Phase.EVALUATING_DONE, "evaluation complete")
+                cp.save(paths.checkpoint_file)
+
+            # Phase 5: 결과 판단
+            ok, reason = ev.validate_qa_report(paths)
+            if not ok:
+                notify(config, "warning", f"qa-report.md 검증 실패: {reason}", project_name=paths.project_name)
+                exit_code = 4
+                break
+
+            if ev.is_pass(paths):
+                consecutive_fails = 0
+                _archive_sprint(sprint_num, paths)
+                has_next = _parse_has_next_sprint(paths)
+
+                if not has_next:
+                    _notify_project_complete(config, sprint_tracer, paths, sprint_num)
+                    cp.advance(Phase.NONE, f"project complete at sprint-{sprint_num}")
+                    cp.save(paths.checkpoint_file)
+                    break
+
+                _notify_pass_with_next(config, sprint_tracer, sprint_num, paths)
+
+                if single_sprint:
+                    cp.advance(Phase.NONE, f"sprint-{sprint_num} done (single-sprint mode)")
+                    cp.save(paths.checkpoint_file)
+                    break
+
+                decision = wait_for_approval_or_stop(paths)
+                if decision == "stop":
+                    break
+
+                # 다음 스프린트 준비: 체크포인트 리셋
+                cp.advance(Phase.NONE, f"sprint-{sprint_num} done, continuing")
+                cp.save(paths.checkpoint_file)
+                # Checkpoint 리로드
+                cp = Checkpoint.load(paths.checkpoint_file)
+
+            else:  # FAIL
+                consecutive_fails += 1
+
+                # v2.2: 체크포인트 CONTRACT_DONE으로 되돌림
+                cp = Checkpoint(phase=Phase.CONTRACT_DONE, detail=f"sprint-{sprint_num} FAIL, reset to contract_done")
+                cp.save(paths.checkpoint_file)
+
+                _notify_fail_with_options(config, sprint_tracer, sprint_num, paths, consecutive_fails)
+
+                if single_sprint:
+                    exit_code = 1
+                    break
+
+                decision = wait_for_approval_or_stop(paths)
+                if decision == "stop":
+                    break
+                elif decision == "eval":
+                    # Evaluator만 재실행
+                    cp.advance(Phase.EVALUATING, "re-evaluating after FAIL")
+                    cp.save(paths.checkpoint_file)
+                    try:
+                        with sprint_tracer.span("evaluator-rerun") as info:
+                            result = ev.run_evaluate(config, paths)
+                            info["stdout"] = result.stdout or ""
+                    except Exception as e:
+                        notify(config, "error", f"Evaluator 재실행 중 예외: {e}", project_name=paths.project_name)
+                    cp.advance(Phase.EVALUATING_DONE, "re-evaluation complete")
+                    cp.save(paths.checkpoint_file)
+                    continue  # Phase 5로 돌아가 다시 판정
+                # "resume": Generator 재진입 (루프 계속 — cp는 CONTRACT_DONE)
+
+            sprints_run += 1
+            sprint_tracer.finalize()
+
     finally:
         receiver.stop()
-        tracer.finalize()
+
     return exit_code
-
-
-def _handle_results(
-    config: ForgeConfig,
-    paths: ProjectPaths,
-    cp: Checkpoint,
-    sprint_num: int,
-) -> int:
-    """Phase 5: PASS/FAIL 분기."""
-    ok, reason = ev.validate_qa_report(paths)
-    if not ok:
-        notify(
-            config,
-            "warning",
-            f"qa-report.md 검증 실패: {reason}",
-            project_name=paths.project_name,
-        )
-        return 4
-
-    if ev.is_pass(paths):
-        archive = paths.sprint_done_path(sprint_num)
-        try:
-            archive.write_text(
-                f"# Sprint {sprint_num} — DONE\n\n"
-                f"## qa-report.md\n\n"
-                + paths.qa_report.read_text(encoding="utf-8", errors="replace"),
-                encoding="utf-8",
-            )
-        except OSError:
-            pass
-        notify(
-            config,
-            "qa_pass",
-            f"Sprint {sprint_num} PASS — 아카이브 완료.",
-            file_path=paths.qa_report,
-            project_name=paths.project_name,
-        )
-        cp.advance(Phase.NONE, f"sprint-{sprint_num} done")
-        cp.save(paths.checkpoint_file)
-        return 0
-
-    notify(
-        config,
-        "qa_fail",
-        f"Sprint {sprint_num} FAIL — 다음 행동 선택: /resume=evaluator 재실행, "
-        "/skip=generator 재개, /exit=중단.",
-        file_path=paths.qa_report,
-        project_name=paths.project_name,
-    )
-    signal = wait_for_approval(paths, timeout=1800)
-    if signal == "skip":
-        cp.advance(Phase.GENERATING, "resume generator after qa_fail")
-    elif signal == "exit":
-        cp.advance(Phase.NONE, "halted by user at qa_fail")
-    else:
-        cp.advance(Phase.EVALUATING, "re-evaluating after qa_fail")
-    cp.save(paths.checkpoint_file)
-    return 1

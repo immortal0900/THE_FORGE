@@ -1,13 +1,25 @@
 {
   "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if [ -f pyproject.toml ]; then ruff check --fix --quiet 2>/dev/null || true; fi",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "matcher": "*",
         "hooks": [
           {
             "type": "command",
-            "command": "forge notify session_stop \"Generator 세션 종료\" artifacts/progress-log.md",
-            "timeout": 10
+            "command": "forge notify session_stop 'Generator 세션 종료' artifacts/progress-log.md 2>/dev/null || true",
+            "timeout": 5
           }
         ]
       }

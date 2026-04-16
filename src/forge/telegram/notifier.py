@@ -21,6 +21,10 @@ EMOJI = {
     "error": "🚨",
     "info": "🔔",
     "session_stop": "⏹️",
+    "sprint_pass_next": "✅",
+    "project_complete": "🎉",
+    "auto_stop": "⚠️",
+    "budget_exceeded": "💰",
 }
 
 _API_BASE = "https://api.telegram.org"
