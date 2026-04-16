@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 from pathlib import Path
 from subprocess import CompletedProcess
@@ -16,9 +17,10 @@ def _run_claude_agent(
     cwd: Path,
     timeout: int = 1800,
 ) -> CompletedProcess:
+    claude = shutil.which("claude") or "claude"
     return subprocess.run(
         [
-            "claude",
+            claude,
             "-p",
             "--agent",
             agent,

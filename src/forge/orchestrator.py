@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import platform
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -476,8 +477,9 @@ def run_cycle(
                 notify(config, "generator_start", f"Sprint {sprint_num} Generator 세션 시작.", project_name=paths.project_name)
                 with sprint_tracer.span("generator", mode="interactive"):
                     try:
+                        claude_cli = shutil.which("claude") or "claude"
                         subprocess.run(
-                            ["claude"],
+                            [claude_cli],
                             cwd=str(paths.project_root),
                             stdin=sys.stdin,
                             stdout=sys.stdout,

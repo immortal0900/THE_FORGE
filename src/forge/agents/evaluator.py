@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 from pathlib import Path
 from subprocess import CompletedProcess
@@ -16,9 +17,10 @@ def _run_claude_agent(
     cwd: Path,
     timeout: int = 1800,
 ) -> CompletedProcess:
+    claude = shutil.which("claude") or "claude"
     return subprocess.run(
         [
-            "claude",
+            claude,
             "-p",
             "--agent",
             agent,
@@ -60,8 +62,9 @@ def _append_playwright_results(paths: ProjectPaths, timeout: int) -> None:
     if not any(p.exists() for p in candidates):
         return
     try:
+        npx = shutil.which("npx") or "npx"
         result = subprocess.run(
-            ["npx", "playwright", "test"],
+            [npx, "playwright", "test"],
             cwd=str(paths.project_root),
             capture_output=True,
             text=True,
