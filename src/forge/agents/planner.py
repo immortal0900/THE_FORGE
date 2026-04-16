@@ -27,7 +27,7 @@ def _run_claude_agent(
             "--max-turns",
             str(max_turns),
             "--permission-mode",
-            "acceptEdits",
+            "bypassPermissions",
             prompt,
         ],
         cwd=str(cwd),
@@ -58,9 +58,11 @@ def run_generate(
 def run_review(config: ForgeConfig, paths: ProjectPaths) -> CompletedProcess:
     """모드 B — 기존 spec.md 검토."""
     prompt = (
-        "artifacts/spec.md가 이미 존재한다. 리뷰 모드로 동작하여 "
-        "artifacts/plan-review.md를 작성하라. "
-        "종합 판정은 READY 또는 NEEDS_REVISION 중 하나여야 한다."
+        "artifacts/spec.md가 이미 존재한다. **반드시 Mode B(리뷰 모드)로 동작**하라. "
+        "생성 모드로 전환하지 말 것. "
+        "최우선 작업: artifacts/plan-review.md를 작성하라 "
+        "(종합 판정은 READY 또는 NEEDS_REVISION 중 하나). "
+        "plan-review.md 작성 완료 후에만, specs/ 에 누락된 도메인 스펙이 있으면 추가로 보강하라."
     )
     return _run_claude_agent(
         prompt, "planner", config.planner_review_max_turns, paths.project_root

@@ -255,6 +255,10 @@ def _backup_then_copy(src: Path, dst: Path, backup_dir: Path, force: bool) -> No
 def _copy_scaffold(scaffold: Path, paths: ProjectPaths, force: bool) -> None:
     _backup_then_copy(scaffold / "CLAUDE.md", paths.claude_md, paths.backup, force)
 
+    mcp_src = scaffold / ".mcp.json"
+    if mcp_src.exists():
+        _backup_then_copy(mcp_src, paths.project_root / ".mcp.json", paths.backup, force)
+
     agent_targets = {
         scaffold / "agents" / "planner" / "AGENT.md":
             paths.project_root / ".claude" / "agents" / "planner" / "AGENT.md",

@@ -18,7 +18,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "forge notify session_stop 'Generator 세션 종료' artifacts/progress-log.md 2>/dev/null || true",
+            "command": "forge notify session_stop 'Claude 세션 종료' artifacts/progress-log.md 2>/dev/null || true",
             "timeout": 5
           }
         ]

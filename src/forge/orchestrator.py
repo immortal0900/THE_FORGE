@@ -493,8 +493,14 @@ def run_cycle(
                 with sprint_tracer.span("generator", mode="interactive"):
                     try:
                         claude_cli = shutil.which("claude") or "claude"
+                        initial_prompt = (
+                            f"Sprint {sprint_num} 구현을 시작하라. "
+                            f"artifacts/sprint-contract.md를 정독하고 체크박스 순서대로 구현·커밋하라. "
+                            f"각 완료 항목은 `[x]`로 표시하고, 중요 결정은 artifacts/decisions/에 기록하라. "
+                            f"전체 완료 시 artifacts/progress-log.md 최상단에 스프린트 결과 블록을 추가한 뒤 종료하라."
+                        )
                         subprocess.run(
-                            [claude_cli],
+                            [claude_cli, "--permission-mode", "bypassPermissions", initial_prompt],
                             cwd=str(paths.project_root),
                             stdin=sys.stdin,
                             stdout=sys.stdout,
