@@ -266,7 +266,11 @@ def _notify_pass_with_next(
         f"/stop — 여기서 중단\n"
         f"/status — 상세 상태"
     )
-    notify(config, "sprint_pass_next", msg, file_path=paths.qa_report, project_name=paths.project_name)
+    notify(
+        config, "sprint_pass_next", msg,
+        file_path=paths.qa_report, project_name=paths.project_name,
+        buttons=[["/resume", "/stop"], ["/status"]],
+    )
 
 
 def _notify_fail_with_options(
@@ -295,7 +299,11 @@ def _notify_fail_with_options(
         f"/eval — Evaluator 재실행\n"
         f"/stop — 여기서 중단"
     )
-    notify(config, "qa_fail", msg, file_path=paths.qa_report, project_name=paths.project_name)
+    notify(
+        config, "qa_fail", msg,
+        file_path=paths.qa_report, project_name=paths.project_name,
+        buttons=[["/resume", "/eval"], ["/stop"]],
+    )
 
 
 def _notify_project_complete(
@@ -403,12 +411,18 @@ def run_cycle(
                 )
 
             status = pl.plan_review_status(paths)
+            plan_buttons = (
+                [["/resume", "/exit"]]
+                if status == "READY"
+                else [["/skip", "/resume"], ["/exit"]]
+            )
             notify(
                 config,
                 "planner_done" if status == "READY" else "plan_revision",
                 f"plan-review.md 상태: {status}",
                 file_path=paths.plan_review if paths.plan_review.exists() else paths.spec,
                 project_name=paths.project_name,
+                buttons=plan_buttons,
             )
 
             signal = wait_for_approval(paths, timeout=600)
@@ -462,6 +476,7 @@ def run_cycle(
                         f"Sprint {sprint_num} contract 생성됨.",
                         file_path=paths.sprint_contract if paths.sprint_contract.exists() else None,
                         project_name=paths.project_name,
+                        buttons=[["/resume", "/exit"]],
                     )
                     signal = wait_for_approval(paths, timeout=600)
                     if signal == "exit":
