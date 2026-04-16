@@ -40,7 +40,8 @@ def _extract_tokens_from_jsonl(since: float, until: float) -> dict:
     if not claude_home.exists():
         return totals
 
-    project_id = str(Path.cwd().resolve()).replace("\\", "-").replace("/", "-").lstrip("-")
+    cwd = str(Path.cwd().resolve()).lower()
+    project_id = re.sub(r"[:\\/._]", "-", cwd)
     session_dir = claude_home / project_id
     if not session_dir.exists():
         return totals
