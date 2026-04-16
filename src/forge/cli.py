@@ -191,6 +191,7 @@ def _scaffold_dir() -> Path:
     """설치된 패키지 기준 scaffold/ 경로 탐색."""
     here = Path(__file__).resolve().parent
     candidates = [
+        here / "scaffold",  # site-packages/forge/scaffold (installed)
         here.parent.parent / "scaffold",  # src/forge/../../scaffold (dev)
         here.parent / "scaffold",
         Path.cwd() / "scaffold",
