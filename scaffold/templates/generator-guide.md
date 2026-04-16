@@ -1,15 +1,25 @@
 # Generator 상세 가이드
 
 ## 커밋 형식
-`<type>: <요약>`
-- `feat:` 기능 추가
-- `fix:` 버그 수정
-- `refactor:` 기능 변경 없는 구조 개선
-- `test:` 테스트 추가/수정
-- `docs:` 문서만
-- `chore:` 빌드/설정
 
-본문(선택): *왜* 이렇게 했는지. *무엇을*은 diff로 읽힌다.
+**짧고 직관적인 영어**로. 허용 prefix는 세 가지만:
+
+- `feat:` — 기능 추가
+- `fix:` — 버그 수정
+- `refactor:` — 동작 변경 없는 구조 개선
+
+예:
+```
+feat: add watcher debounce
+fix: handle empty vault path
+refactor: extract sync_engine
+```
+
+**금지:**
+- `test:`, `docs:`, `chore:` 등 다른 prefix 사용 금지 (위 3가지로 흡수)
+- 한국어 커밋 메시지 금지
+- `Co-Authored-By: Claude ...` 같은 자동 서명 금지
+- 여러 줄 요약/본문 금지 (한 줄 요약 원칙, 필요시 본문 1줄만 "왜")
 
 ## progress-log.md 형식
 

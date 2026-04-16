@@ -498,7 +498,9 @@ def run_cycle(
                             f"CLAUDE.md의 세션 시작 절차를 따르되, "
                             f"artifacts/qa-report.md가 존재하면 FAIL 항목부터 우선 수정하라. "
                             f"그 외에는 artifacts/sprint-contract.md 체크박스 순서대로 구현하고, "
-                            f"각 기능 완성 시 `feat: ...` 형식으로 커밋 + 체크박스 `[x]`. "
+                            f"각 기능 완성 시 커밋 + 체크박스 `[x]`. "
+                            f"커밋 메시지는 짧고 직관적인 영어로, prefix는 `feat:` / `fix:` / `refactor:` 세 가지만. "
+                            f"예: `feat: add watcher debounce`. Co-Authored-By 서명 금지. "
                             f"중요 결정은 artifacts/decisions/decision-NNN.md, "
                             f"세션 종료 시 artifacts/progress-log.md 최상단에 결과 블록 추가."
                         )

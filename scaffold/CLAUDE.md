@@ -17,7 +17,12 @@
 - 한 번에 하나의 기능만 구현하라
 - sprint-contract.md에서 우선순위 높은 미완료 항목을 선택하라
 - 완료 시 해당 항목을 [x]로 체크하라
-- 기능 하나 완성할 때마다 커밋하라 (형식: `feat: [기능명]`)
+- 기능 하나 완성할 때마다 커밋하라
+  - **커밋 메시지는 짧고 직관적인 영어**로 작성
+  - **허용 prefix는 `feat:`, `fix:`, `refactor:` 세 가지만**
+  - 예: `feat: add watcher debounce`, `fix: handle empty vault path`, `refactor: extract sync_engine`
+  - 본문은 선택 — 필요시 "왜"만 한 줄
+  - Co-Authored-By 등 자동 서명 금지
 - 작동하지 않는 코드를 커밋하지 마라
 
 ## 세션 종료 절차 (필수)
