@@ -1,3 +1,14 @@
+---
+template_id: langfuse-setup
+domain: LLM 추적/관측
+keywords: [langfuse, trace, span, observability, monitoring, token, cost]
+when_to_use: |
+  프로젝트 코드 내 LLM 호출을 Langfuse로 추적할 때.
+  토큰 사용량, 레이턴시, 세션별 비용을 모니터링하는 경우.
+output: artifacts/specs/langfuse-tracing.md
+related_templates: [deepeval-setup]
+---
+
 # Langfuse 추적 스펙 템플릿
 
 (레이어 2 — 프로젝트 코드 내부 LLM 호출 추적)

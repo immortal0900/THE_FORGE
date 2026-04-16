@@ -377,6 +377,9 @@ def run_cycle(
             tracer = SprintTracer(config, sprint_num, paths.project_name, paths.cost_log)
             cp.advance(Phase.PLANNING, "planner running")
             cp.save(paths.checkpoint_file)
+            # specs/ 변경 감지를 위해 실행 전 목록 기록
+            specs_before = set(paths.specs.glob("*.md")) if paths.specs.exists() else set()
+
             with tracer.span("planner") as info:
                 if not paths.spec.exists():
                     if not request:
@@ -387,6 +390,16 @@ def run_cycle(
                 else:
                     result = pl.run_review(config, paths)
                     info["stdout"] = result.stdout or ""
+
+            # Planner가 생성한 새 specs/*.md 감지 + Telegram 전송
+            specs_after = set(paths.specs.glob("*.md")) if paths.specs.exists() else set()
+            new_specs = specs_after - specs_before
+            for spec_file in sorted(new_specs):
+                notify(
+                    config, "spec_detail",
+                    f"도메인 상세 스펙: {spec_file.name}",
+                    file_path=spec_file, project_name=paths.project_name,
+                )
 
             status = pl.plan_review_status(paths)
             notify(

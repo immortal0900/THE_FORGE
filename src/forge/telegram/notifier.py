@@ -11,6 +11,7 @@ from ..config import ForgeConfig
 
 EMOJI = {
     "planner_done": "📋",
+    "spec_detail": "📄",
     "plan_revision": "⚠️",
     "sprint_contract": "📝",
     "generator_start": "⚙️",

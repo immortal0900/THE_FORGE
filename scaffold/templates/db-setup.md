@@ -1,3 +1,13 @@
+---
+template_id: db-setup
+domain: 데이터베이스
+keywords: [postgres, mysql, mongodb, sqlite, vector, schema, migration, index]
+when_to_use: |
+  데이터베이스 스키마 설계, 인덱스, 벡터 검색, 마이그레이션이 필요할 때.
+output: artifacts/specs/db-schema.md
+related_templates: []
+---
+
 # DB 설정 스펙 템플릿
 
 ## 스키마
