@@ -132,16 +132,28 @@ class TelegramReceiver:
             self._reply(f"❌ {caption} 저장 실패")
 
     def _send_status(self) -> None:
+        from datetime import datetime
+
         from ..checkpoint import Checkpoint
         from ..cost_tracker import parse_cost_log
 
         cp = Checkpoint.load(self.paths.checkpoint_file)
         total_mins = parse_cost_log(self.paths.cost_log)
+        elapsed_line = ""
+        try:
+            started = datetime.fromisoformat(cp.timestamp)
+            elapsed = (datetime.now() - started).total_seconds() / 60
+            if elapsed >= 0:
+                elapsed_line = f"현재 단계 경과: {elapsed:.0f}분\n"
+        except (ValueError, TypeError):
+            pass
+
         self._reply(
             f"📊 [{self.paths.project_name}]\n"
             f"Phase: {cp.phase.name}\n"
             f"Sprint: #{self.paths.current_sprint()}\n"
-            f"누적 시간: {total_mins:.0f}분\n"
+            f"누적 시간: {total_mins:.0f}분 (완료분)\n"
+            f"{elapsed_line}"
             f"Detail: {cp.detail}\n"
             f"Updated: {cp.timestamp}"
         )

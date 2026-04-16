@@ -180,6 +180,46 @@ def notify(
     send(config, event_type, message, file_path=file_path, project_name=paths.project_name)
 
 
+@app.command(name="update-templates")
+def update_templates(
+    root: Optional[Path] = typer.Option(None, "--root", "-r"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="변경 없이 대상만 출력"),
+) -> None:
+    """설치본 scaffold의 templates/*.md를 프로젝트 templates/로 재동기화 (기존 파일은 .backup/에 백업)."""
+    paths = _paths(root)
+    paths.ensure_artifacts()
+    scaffold = _scaffold_dir()
+    tpl_dir = scaffold / "templates"
+    if not tpl_dir.exists():
+        console.print(f"[red]scaffold/templates를 찾을 수 없습니다: {tpl_dir}[/red]")
+        raise typer.Exit(code=5)
+
+    target_tpl = paths.project_root / "templates"
+    target_tpl.mkdir(exist_ok=True)
+
+    updated: list[str] = []
+    for src in sorted(tpl_dir.glob("*.md")):
+        dst = target_tpl / src.name
+        if dst.exists() and dst.read_bytes() == src.read_bytes():
+            continue
+        if dry_run:
+            updated.append(src.name)
+            continue
+        _backup_then_copy(src, dst, paths.backup, force=True)
+        updated.append(src.name)
+
+    if not updated:
+        console.print("[green]모든 템플릿이 최신 상태입니다.[/green]")
+        return
+
+    verb = "갱신 예정" if dry_run else "갱신됨"
+    console.print(f"[green]{len(updated)}개 템플릿 {verb}:[/green]")
+    for name in updated:
+        console.print(f"  • {name}")
+    if not dry_run:
+        console.print(f"\n기존 파일은 [dim]{paths.backup}[/dim]에 백업되었습니다.")
+
+
 @app.command()
 def version() -> None:
     console.print(f"THE FORGE v{__version__}")
