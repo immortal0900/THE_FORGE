@@ -129,10 +129,17 @@ class SprintTracer:
                             "project": project_name,
                             "sprint": sprint_num,
                             "harness_version": __version__,
-                            "session_id": f"{project_name}-sprint-{sprint_num}",
                         },
                     )
                     self._root_span = self._root_cm.__enter__()
+                    try:
+                        self._lf_client.update_current_trace(
+                            name=f"{project_name}-sprint-{sprint_num}",
+                            session_id=project_name,
+                            user_id=project_name,
+                        )
+                    except Exception:
+                        pass
             except ImportError:
                 self._lf_client = None
             except Exception:
@@ -194,13 +201,15 @@ class SprintTracer:
             if lf_span is not None:
                 try:
                     lf_span.update(
+                        usage_details={
+                            "input": tok_in,
+                            "output": tok_out,
+                            "cache_read": info["tokens_cache"],
+                        },
                         metadata={
                             "duration_seconds": duration,
-                            "tokens_input": tok_in,
-                            "tokens_output": tok_out,
-                            "tokens_cache": info["tokens_cache"],
                             "status": status,
-                        }
+                        },
                     )
                 except Exception:
                     pass
