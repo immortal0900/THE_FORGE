@@ -26,6 +26,8 @@ def _run_claude_agent(
             agent,
             "--max-turns",
             str(max_turns),
+            "--permission-mode",
+            "acceptEdits",
             prompt,
         ],
         cwd=str(cwd),

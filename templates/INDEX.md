@@ -11,7 +11,6 @@
 | db-setup.md | 데이터베이스 | postgres, mysql, mongodb, sqlite, vector | artifacts/specs/db-schema.md |
 | deepeval-setup.md | LLM 평가 | deepeval, metric, g-eval, test case | artifacts/specs/deepeval-metrics.md |
 | langfuse-setup.md | LLM 추적/관측 | langfuse, trace, span, observability | artifacts/specs/langfuse-tracing.md |
-| claude-cli-subprocess.md | Claude CLI 자동화/하네스 | claude, subprocess, headless, cli, agent, permission | artifacts/specs/claude-cli-integration.md |
 
 ## 공통 템플릿
 
