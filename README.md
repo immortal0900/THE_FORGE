@@ -58,7 +58,7 @@ Claude Code 자체가 이미 완성된 하네스(harness)다. **THE_FORGE는 그
 - **httpx 0.27+** — Telegram Bot API HTTPS 클라이언트
 
 ### Observability
-- **Langfuse 2.x** (선택) — Trace/Span 기반 스프린트 관측
+- **Langfuse 3.x+** — Trace/Span 기반 스프린트 관측 (필수 의존성, 키 없으면 자동 no-op)
 - **rich 13+** — 터미널 상태 테이블 렌더링
 
 ### External Dependencies
@@ -230,11 +230,11 @@ flowchart TB
 git clone https://github.com/HWAIN/THE_FORGE.git
 cd THE_FORGE
 uv sync
-uv tool install .
-
-# Langfuse 추적 활성화 (선택)
-uv tool install ".[langfuse]"
+uv tool install .   # Langfuse 포함 자동 설치
 ```
+
+Langfuse 추적은 `.env`에 `FORGE_LANGFUSE_PUBLIC_KEY` / `FORGE_LANGFUSE_SECRET_KEY`가 있을 때만 활성화됩니다.
+키가 없으면 자동 no-op이라 추가 설치 작업 불필요.
 
 ### 프로젝트 초기화
 
@@ -517,7 +517,7 @@ uv run ruff format src/ tests/
 - `TELEGRAM_CHAT_ID`가 잘못되었거나 봇이 해당 채팅에 초대되지 않은 상태. 본인 계정으로 `/start`를 먼저 보내고 `getUpdates`로 `chat.id` 확인.
 
 **Q. Langfuse 추적이 동작하지 않는다**
-- 선택 의존성이다. `uv tool install ".[langfuse]"`로 재설치하고 `langfuse_public_key` / `langfuse_secret_key`가 설정되어 있는지 확인. 키가 비어있으면 `SprintTracer`는 no-op 모드로 동작한다.
+- 필수 의존성이라 `uv tool install .`로 자동 설치된다. `.env` 또는 환경변수에 `FORGE_LANGFUSE_PUBLIC_KEY` / `FORGE_LANGFUSE_SECRET_KEY`가 있는지 확인. 키가 비어있으면 `SprintTracer`는 no-op 모드로 동작한다. 실패 시 stderr에 `[forge] Langfuse ... failed: ...` 형태로 원인이 출력된다.
 
 **Q. 체크포인트가 오래되어 이어쓰기가 이상하다**
 - `rm artifacts/.harness-checkpoint.json`으로 초기화하거나 `forge status`로 현재 Phase 확인 후 수동 처리.

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 import time
 from contextlib import contextmanager
 from datetime import datetime
@@ -33,8 +34,26 @@ def _extract_tokens_from_stdout(stdout: str) -> dict:
     }
 
 
+def _parse_iso_ts(ts: object) -> Optional[float]:
+    """Claude Code JSONL의 'timestamp' 필드 (ISO 8601 문자열) → Unix epoch float."""
+    if isinstance(ts, (int, float)):
+        return float(ts)
+    if not isinstance(ts, str):
+        return None
+    try:
+        # "2026-04-13T14:54:12.013Z" 형식 지원
+        if ts.endswith("Z"):
+            ts = ts[:-1] + "+00:00"
+        return datetime.fromisoformat(ts).timestamp()
+    except (ValueError, TypeError):
+        return None
+
+
 def _extract_tokens_from_jsonl(since: float, until: float) -> dict:
-    """interactive 세션용: ~/.claude/projects/ JSONL에서 시간 범위 내 토큰 합산."""
+    """~/.claude/projects/<id>/*.jsonl에서 [since, until] 범위 assistant 레코드 토큰 합산.
+
+    claude -p / interactive 모두 여기 기록됨.
+    """
     claude_home = Path.home() / ".claude" / "projects"
     totals = {"input": 0, "output": 0, "cache": 0}
     if not claude_home.exists():
@@ -52,17 +71,21 @@ def _extract_tokens_from_jsonl(since: float, until: float) -> dict:
                 for line in f:
                     try:
                         record = json.loads(line)
-                        ts = record.get("timestamp", 0)
-                        if not (since <= ts <= until):
-                            continue
-                        if record.get("type") != "assistant":
-                            continue
-                        usage = record.get("message", {}).get("usage", {})
-                        totals["input"] += usage.get("input_tokens", 0)
-                        totals["output"] += usage.get("output_tokens", 0)
-                        totals["cache"] += usage.get("cache_read_input_tokens", 0)
-                    except (json.JSONDecodeError, KeyError, TypeError):
+                    except json.JSONDecodeError:
                         continue
+                    if record.get("type") != "assistant":
+                        continue
+                    ts = _parse_iso_ts(record.get("timestamp"))
+                    if ts is None or not (since <= ts <= until):
+                        continue
+                    usage = (record.get("message") or {}).get("usage") or {}
+                    totals["input"] += usage.get("input_tokens", 0) or 0
+                    totals["output"] += usage.get("output_tokens", 0) or 0
+                    # cache_read + cache_creation 둘 다 청구 대상
+                    totals["cache"] += (
+                        (usage.get("cache_read_input_tokens", 0) or 0)
+                        + (usage.get("cache_creation_input_tokens", 0) or 0)
+                    )
         except OSError:
             continue
 
@@ -117,7 +140,12 @@ class SprintTracer:
                     secret_key=config.langfuse_secret_key,
                     host=config.langfuse_host,
                 )
-                if not self._lf_client.auth_check():
+                try:
+                    auth_ok = self._lf_client.auth_check()
+                except Exception as e:
+                    sys.stderr.write(f"[forge] Langfuse auth_check failed: {e!r}\n")
+                    auth_ok = False
+                if not auth_ok:
                     self._lf_client = None
                 else:
                     from . import __version__
@@ -138,11 +166,13 @@ class SprintTracer:
                             session_id=project_name,
                             user_id=project_name,
                         )
-                    except Exception:
-                        pass
-            except ImportError:
+                    except Exception as e:
+                        sys.stderr.write(f"[forge] Langfuse update_current_trace failed: {e!r}\n")
+            except ImportError as e:
+                sys.stderr.write(f"[forge] Langfuse import failed: {e!r}\n")
                 self._lf_client = None
-            except Exception:
+            except Exception as e:
+                sys.stderr.write(f"[forge] Langfuse init failed: {e!r}\n")
                 self._lf_client = None
 
     @contextmanager
