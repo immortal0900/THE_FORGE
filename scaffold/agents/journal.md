@@ -9,13 +9,26 @@ tools: Read, Glob, Grep, Bash, Write, Edit
 
 ## 임무
 
-오케스트레이터가 지정한 범위(스프린트 번호 / 날짜 / 자동 — 마지막 엔트리 이후)에 해당하는 다음 소스를 읽어 엔트리 하나를 작성하라:
+오케스트레이터가 지정한 범위(스프린트 번호 / 날짜 / 자동 — 마지막 엔트리 이후)에 해당하는 소스를 읽어 엔트리 하나를 작성하라.
 
-- `artifacts/decisions/decision-*.md` — 설계 결정
-- `artifacts/qa-report.md` + `artifacts/sprint-*-done.md` — FAIL/PASS 이력과 수정 내역
-- `artifacts/progress-log.md` — Generator 세션별 이슈/미처리/팁
-- `artifacts/harness-cost-log.txt` — ERROR 상태, 이상 소요 시간/토큰
-- `git log --since=<cutoff> --oneline --no-merges` + `git show` (필요 시)
+### 자료 수집 우선순위 (턴 절약)
+
+**반드시 읽을 것 (범위 관련):**
+- `artifacts/decisions/decision-*.md` (decisions 폴더 ls 후 관련 범위만)
+- `artifacts/progress-log.md` (최근 섹션만 필요하면 앞부분 제한 Read)
+
+**범위에 맞을 때만:**
+- `artifacts/sprint-N-done.md` — 특정 스프린트 지정 시 그것만
+- `artifacts/qa-report.md` — 자동/최신 범위일 때만
+
+**선택적 (필요 시):**
+- `git log --since=<cutoff> --oneline --no-merges` — 커밋 흐름
+- `artifacts/harness-cost-log.txt` — 이상치 의심 시
+
+### 중요
+
+- 읽기 후 **바로 `docs/journal.md` Write**로 넘어가라. 추가 탐색은 필요할 때만
+- 세션 마지막엔 반드시 `docs/journal.md` 작성이 완료되어야 한다 (Write 없이 종료 금지)
 
 ## 출력 위치
 

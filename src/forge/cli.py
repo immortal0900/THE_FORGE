@@ -149,8 +149,18 @@ def journal(
                 )
                 console.print(f"[dim]Telegram에 저널 요약 전송됨 ({title[:60]})[/dim]")
     else:
-        console.print("[yellow]docs/journal.md가 생성되지 않았습니다. stdout 확인:[/yellow]")
-        console.print((result.stdout or "")[-1500:])
+        console.print(
+            "[yellow]docs/journal.md가 생성되지 않았습니다 — 에이전트가 파일 작성 전에 턴 소진했을 가능성.[/yellow]\n"
+            f"[dim]힌트: pyproject.toml [tool.forge]에 journal_max_turns = 120 등으로 늘리거나 --sprint N으로 범위 좁히세요.[/dim]"
+        )
+        tail = (result.stdout or "").strip()[-1500:]
+        if tail:
+            console.print("[dim]--- stdout tail ---[/dim]")
+            console.print(tail)
+        err = (result.stderr or "").strip()[-800:]
+        if err:
+            console.print("[dim]--- stderr tail ---[/dim]")
+            console.print(err)
 
 
 def _extract_latest_journal_entry(journal_path: Path) -> tuple[str, str]:
@@ -293,6 +303,46 @@ def update_templates(
 
     verb = "갱신 예정" if dry_run else "갱신됨"
     console.print(f"[green]{len(updated)}개 템플릿 {verb}:[/green]")
+    for name in updated:
+        console.print(f"  • {name}")
+    if not dry_run:
+        console.print(f"\n기존 파일은 [dim]{paths.backup}[/dim]에 백업되었습니다.")
+
+
+@app.command(name="update-agents")
+def update_agents(
+    root: Optional[Path] = typer.Option(None, "--root", "-r"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="변경 없이 대상만 출력"),
+) -> None:
+    """설치본 scaffold의 agents/*.md를 프로젝트 .claude/agents/로 재동기화 (기존 파일은 .backup/에 백업)."""
+    paths = _paths(root)
+    paths.ensure_artifacts()
+    scaffold = _scaffold_dir()
+    src_dir = scaffold / "agents"
+    if not src_dir.exists():
+        console.print(f"[red]scaffold/agents를 찾을 수 없습니다: {src_dir}[/red]")
+        raise typer.Exit(code=5)
+
+    target_dir = paths.project_root / ".claude" / "agents"
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    updated: list[str] = []
+    for src in sorted(src_dir.glob("*.md")):
+        dst = target_dir / src.name
+        if dst.exists() and dst.read_bytes() == src.read_bytes():
+            continue
+        if dry_run:
+            updated.append(src.name)
+            continue
+        _backup_then_copy(src, dst, paths.backup, force=True)
+        updated.append(src.name)
+
+    if not updated:
+        console.print("[green]모든 에이전트가 최신 상태입니다.[/green]")
+        return
+
+    verb = "갱신 예정" if dry_run else "갱신됨"
+    console.print(f"[green]{len(updated)}개 에이전트 {verb}:[/green]")
     for name in updated:
         console.print(f"  • {name}")
     if not dry_run:

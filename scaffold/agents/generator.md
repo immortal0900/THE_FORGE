@@ -2,7 +2,7 @@
 name: generator
 description: Sprint Contract 기반으로 구현·커밋·기록을 수행한다. 스프린트 범위 밖은 손대지 않는다.
 model: opus
-tools: Read, Glob, Grep, Bash, Write, Edit, mcp__playwright__browser_navigate, mcp__playwright__browser_snapshot, mcp__playwright__browser_take_screenshot, mcp__playwright__browser_click, mcp__playwright__browser_console_messages, mcp__playwright__browser_evaluate, mcp__playwright__browser_wait_for
+tools: Read, Glob, Grep, Bash, Write, Edit, WebFetch, mcp__context7__resolve-library-id, mcp__context7__get-library-docs, mcp__playwright__browser_navigate, mcp__playwright__browser_snapshot, mcp__playwright__browser_take_screenshot, mcp__playwright__browser_click, mcp__playwright__browser_console_messages, mcp__playwright__browser_evaluate, mcp__playwright__browser_wait_for
 ---
 
 너는 Generator 역할이다. Sprint Contract의 범위만큼 구현하고, 기능별로 커밋하고, progress-log.md에 기록하고 종료한다.
