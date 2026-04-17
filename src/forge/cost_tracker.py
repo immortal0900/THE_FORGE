@@ -52,10 +52,11 @@ def _parse_iso_ts(ts: object) -> Optional[float]:
 def _extract_tokens_from_jsonl(since: float, until: float) -> dict:
     """~/.claude/projects/<id>/*.jsonl에서 [since, until] 범위 assistant 레코드 토큰 합산.
 
-    claude -p / interactive 모두 여기 기록됨.
+    claude -p / interactive 모두 여기 기록됨. 가장 많이 쓰인 model 이름도 함께 반환
+    (Langfuse가 자동 cost 계산하려면 model이 필요).
     """
     claude_home = Path.home() / ".claude" / "projects"
-    totals = {"input": 0, "output": 0, "cache": 0}
+    totals = {"input": 0, "output": 0, "cache": 0, "model": ""}
     if not claude_home.exists():
         return totals
 
@@ -64,6 +65,8 @@ def _extract_tokens_from_jsonl(since: float, until: float) -> dict:
     session_dir = claude_home / project_id
     if not session_dir.exists():
         return totals
+
+    model_token_counts: dict[str, int] = {}
 
     for jsonl_file in session_dir.glob("*.jsonl"):
         try:
@@ -78,16 +81,30 @@ def _extract_tokens_from_jsonl(since: float, until: float) -> dict:
                     ts = _parse_iso_ts(record.get("timestamp"))
                     if ts is None or not (since <= ts <= until):
                         continue
-                    usage = (record.get("message") or {}).get("usage") or {}
-                    totals["input"] += usage.get("input_tokens", 0) or 0
-                    totals["output"] += usage.get("output_tokens", 0) or 0
+                    message = record.get("message") or {}
+                    usage = message.get("usage") or {}
+                    tok_in = usage.get("input_tokens", 0) or 0
+                    tok_out = usage.get("output_tokens", 0) or 0
                     # cache_read + cache_creation 둘 다 청구 대상
-                    totals["cache"] += (
+                    tok_cache = (
                         (usage.get("cache_read_input_tokens", 0) or 0)
                         + (usage.get("cache_creation_input_tokens", 0) or 0)
                     )
+                    totals["input"] += tok_in
+                    totals["output"] += tok_out
+                    totals["cache"] += tok_cache
+
+                    model_name = message.get("model") or ""
+                    if model_name:
+                        model_token_counts[model_name] = (
+                            model_token_counts.get(model_name, 0) + tok_in + tok_out
+                        )
         except OSError:
             continue
+
+    # 가장 많은 토큰을 쓴 모델을 대표 모델로 채택
+    if model_token_counts:
+        totals["model"] = max(model_token_counts, key=model_token_counts.get)
 
     return totals
 
@@ -130,10 +147,11 @@ class SprintTracer:
         self._lf_client = None
         self._root_span = None
         self._root_cm = None
+        self._propagate_cm = None
 
         if config.langfuse_enabled:
             try:
-                from langfuse import Langfuse
+                from langfuse import Langfuse, propagate_attributes
 
                 self._lf_client = Langfuse(
                     public_key=config.langfuse_public_key,
@@ -161,13 +179,17 @@ class SprintTracer:
                     )
                     self._root_span = self._root_cm.__enter__()
                     try:
-                        self._lf_client.update_current_trace(
-                            name=f"{project_name}-sprint-{sprint_num}",
+                        # v4: update_current_trace() 제거됨 → propagate_attributes CM으로 대체.
+                        # root span 내부에 중첩해야 trace/자식 span에 전파됨.
+                        self._propagate_cm = propagate_attributes(
+                            trace_name=f"{project_name}-sprint-{sprint_num}",
                             session_id=project_name,
                             user_id=project_name,
                         )
+                        self._propagate_cm.__enter__()
                     except Exception as e:
-                        sys.stderr.write(f"[forge] Langfuse update_current_trace failed: {e!r}\n")
+                        sys.stderr.write(f"[forge] Langfuse propagate_attributes failed: {e!r}\n")
+                        self._propagate_cm = None
             except ImportError as e:
                 sys.stderr.write(f"[forge] Langfuse import failed: {e!r}\n")
                 self._lf_client = None
@@ -183,9 +205,11 @@ class SprintTracer:
         lf_span = None
         if self._lf_client is not None:
             try:
+                # v4: as_type='generation' 이어야 usage_details/cost_details가 집계됨.
+                # 'span' 타입은 Langfuse Usage/Cost 컬럼에 반영되지 않음.
                 lf_cm = self._lf_client.start_as_current_observation(
                     name=agent_name,
-                    as_type="span",
+                    as_type="generation",
                     metadata={"mode": mode, "agent": agent_name},
                 )
                 lf_span = lf_cm.__enter__()
@@ -209,12 +233,13 @@ class SprintTracer:
             if tokens["input"] == 0 and tokens["output"] == 0:
                 stdout_tokens = _extract_tokens_from_stdout(info.get("stdout", ""))
                 if stdout_tokens["input"] or stdout_tokens["output"]:
-                    tokens = stdout_tokens
+                    tokens = {**stdout_tokens, "model": ""}
 
             info["duration_seconds"] = duration
             info["tokens_input"] = tokens.get("input", 0)
             info["tokens_output"] = tokens.get("output", 0)
             info["tokens_cache"] = tokens.get("cache", 0)
+            info["model"] = tokens.get("model", "")
             self.spans.append(info)
 
             # harness-cost-log.txt 기록 (v2.3 형식: 시간 + 토큰)
@@ -232,19 +257,23 @@ class SprintTracer:
 
             if lf_span is not None:
                 try:
-                    lf_span.update(
-                        usage_details={
+                    update_kwargs: dict = {
+                        "usage_details": {
                             "input": tok_in,
                             "output": tok_out,
                             "cache_read": info["tokens_cache"],
                         },
-                        metadata={
+                        "metadata": {
                             "duration_seconds": duration,
                             "status": status,
                         },
-                    )
-                except Exception:
-                    pass
+                    }
+                    # model 있으면 Langfuse가 내장 pricing 테이블로 cost 자동 계산.
+                    if info["model"]:
+                        update_kwargs["model"] = info["model"]
+                    lf_span.update(**update_kwargs)
+                except Exception as e:
+                    sys.stderr.write(f"[forge] Langfuse span.update failed: {e!r}\n")
             if lf_cm is not None:
                 try:
                     lf_cm.__exit__(type(error), error, error.__traceback__ if error else None)
@@ -264,6 +293,12 @@ class SprintTracer:
         if self._root_span is not None:
             try:
                 self._root_span.update(metadata={"final_status": status})
+            except Exception:
+                pass
+        # 역순으로 exit: propagate_attributes → root span.
+        if self._propagate_cm is not None:
+            try:
+                self._propagate_cm.__exit__(None, None, None)
             except Exception:
                 pass
         if self._root_cm is not None:

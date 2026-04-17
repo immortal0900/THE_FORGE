@@ -11,6 +11,9 @@ import time
 from pathlib import Path
 from typing import Optional
 
+from rich.console import Console
+
+from ._logging import report_subprocess
 from .agents import evaluator as ev
 from .agents import planner as pl
 from .checkpoint import Checkpoint, Phase
@@ -18,6 +21,8 @@ from .config import ForgeConfig, ProjectPaths
 from .cost_tracker import SprintTracer, parse_cost_log
 from .telegram.notifier import notify
 from .telegram.receiver import TelegramReceiver
+
+console = Console()
 
 
 # ── stdin 감지 ──────────────────────────────────────────────────────────────
@@ -396,9 +401,11 @@ def run_cycle(
                         return 2
                     result = pl.run_generate(request, config, paths)
                     info["stdout"] = result.stdout or ""
+                    report_subprocess(result, "planner(generate)", console)
                 else:
                     result = pl.run_review(config, paths)
                     info["stdout"] = result.stdout or ""
+                    report_subprocess(result, "planner(review)", console)
 
             # Planner가 생성한 새 specs/*.md 감지 + Telegram 전송
             specs_after = set(paths.specs.glob("*.md")) if paths.specs.exists() else set()
@@ -467,6 +474,7 @@ def run_cycle(
                 with sprint_tracer.span("contract") as info:
                     result = pl.run_contract(sprint_num, config, paths)
                     info["stdout"] = result.stdout or ""
+                    report_subprocess(result, f"planner(contract sprint-{sprint_num})", console)
 
                 # 첫 Sprint Contract만 승인 대기
                 if sprint_num == 1:
@@ -516,6 +524,7 @@ def run_cycle(
                             timeout=config.max_generator_minutes * 60,
                         )
                         info["stdout"] = result.stdout or ""
+                        report_subprocess(result, f"generator sprint-{sprint_num}", console)
                     except KeyboardInterrupt:
                         pass
                     except subprocess.TimeoutExpired:
@@ -539,6 +548,7 @@ def run_cycle(
                     with sprint_tracer.span("evaluator") as info:
                         result = ev.run_evaluate(config, paths)
                         info["stdout"] = result.stdout or ""
+                        report_subprocess(result, f"evaluator sprint-{sprint_num}", console)
                 except Exception as e:
                     notify(config, "error", f"Evaluator 실행 중 예외: {e}", project_name=paths.project_name)
                 cp.advance(Phase.EVALUATING_DONE, "evaluation complete")
@@ -602,6 +612,7 @@ def run_cycle(
                     try:
                         with sprint_tracer.span("evaluator-rerun") as info:
                             result = ev.run_evaluate(config, paths)
+                            report_subprocess(result, f"evaluator-rerun sprint-{sprint_num}", console)
                             info["stdout"] = result.stdout or ""
                     except Exception as e:
                         notify(config, "error", f"Evaluator 재실행 중 예외: {e}", project_name=paths.project_name)

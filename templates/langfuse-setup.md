@@ -34,27 +34,43 @@ related_templates: [deepeval-setup]
 ## 공통 함정 (실전 체크리스트)
 
 ### 1. 토큰이 Tokens/Cost 열에 안 뜸
-- 원인: `span.update(metadata={"tokens_input": ...})` 에 토큰을 넣으면 metadata 탭에만 보이고 집계에 반영 안 됨
-- 해결: **`usage_details`**를 써야 함
+- 원인 A: `span.update(metadata={"tokens_input": ...})` 에 토큰을 넣으면 metadata 탭에만 보이고 집계에 반영 안 됨
+- 원인 B: observation을 `as_type="span"` (또는 `agent`/`tool`/`chain`)으로 만들면 `usage_details`를 넣어도 **Usage/Cost 컬럼에 집계 안 됨**. Langfuse 공식: *"Only observations of type `generation` and `embedding` can track costs and usage."*
+- 해결:
   ```python
-  span.update(
-      usage_details={"input": tok_in, "output": tok_out, "cache_read": tok_cache},
-      metadata={"duration_seconds": duration, "status": status},  # 토큰 외 부가 정보만
-  )
+  # ❌ 안 뜸 — span 타입은 usage 집계 대상 아님
+  client.start_as_current_observation(name="agent", as_type="span")
+
+  # ✅ generation 타입으로 만들어야 함
+  with client.start_as_current_observation(
+      name="agent",
+      as_type="generation",
+      model="claude-sonnet-4-5",  # 있으면 Langfuse 내장 pricing으로 cost 자동 계산
+  ) as gen:
+      gen.update(
+          usage_details={"input": tok_in, "output": tok_out, "cache_read": tok_cache},
+          metadata={"duration_seconds": duration, "status": status},  # 토큰 외 부가 정보만
+      )
   ```
 - 키 이름은 `input`/`output`/`cache_read` 등 Langfuse가 인식하는 표준 필드
+- `model`을 모르면 생략 가능 — Usage는 찍히지만 Cost는 `$0.00`. 직접 계산하려면 `cost_details={"input": usd_in, "output": usd_out}` 전달
 
 ### 2. Session 뷰에 집계 안 됨
 - 원인: `metadata={"session_id": ...}` 처럼 metadata에 넣으면 Langfuse가 세션 필드로 인식 안 함
-- 해결: **trace 레벨**에 직접 설정
+- 해결: **trace 레벨**에 설정 — Langfuse Python SDK **v4부터 `update_current_trace()`는 제거**되고 `propagate_attributes()` 컨텍스트 매니저로 대체됨 (파라미터도 `name` → `trace_name`)
   ```python
-  client.start_as_current_observation(name=..., as_type="span", metadata={...})
-  client.update_current_trace(
-      name="project-sprint-1",
-      session_id=project_name,   # 프로젝트/사용자 단위로 묶어야 Sessions 뷰가 의미 있음
-      user_id=project_name,
-  )
+  from langfuse import Langfuse, propagate_attributes
+
+  with client.start_as_current_observation(name="sprint-1", as_type="span", metadata={...}):
+      with propagate_attributes(
+          trace_name="project-sprint-1",
+          session_id=project_name,   # 프로젝트/사용자 단위로 묶어야 Sessions 뷰가 의미 있음
+          user_id=project_name,
+      ):
+          ...  # 자식 span들은 여기 중첩 — trace 속성이 자동 전파됨
   ```
+  - 수동으로 `__enter__`/`__exit__` 관리 시에도 `root_span.__enter__()` → `propagate.__enter__()` → (작업) → `propagate.__exit__()` → `root_span.__exit__()` 순서 유지
+  - v3 코드: `client.update_current_trace(name=..., session_id=..., user_id=...)` → v4.x에서 `AttributeError` 발생
 - 세션 범위 선택 가이드:
   - 프로젝트 전체를 한 세션으로 → 여러 실행/스프린트가 한 그룹으로 집계 (추천)
   - 한 번의 실행만을 세션으로 → trace 1개 = session 1개라 집계 의미 적음

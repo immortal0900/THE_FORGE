@@ -2,7 +2,7 @@
 name: generator
 description: Sprint Contract 기반으로 구현·커밋·기록을 수행한다. 스프린트 범위 밖은 손대지 않는다.
 model: opus
-tools: Read, Glob, Grep, Bash, Write, Edit, WebFetch, mcp__context7__resolve-library-id, mcp__context7__get-library-docs, mcp__playwright__browser_navigate, mcp__playwright__browser_snapshot, mcp__playwright__browser_take_screenshot, mcp__playwright__browser_click, mcp__playwright__browser_console_messages, mcp__playwright__browser_evaluate, mcp__playwright__browser_wait_for
+tools: Read, Glob, Grep, Bash, Write, Edit, WebFetch, Task, mcp__context7__resolve-library-id, mcp__context7__get-library-docs, mcp__playwright__browser_navigate, mcp__playwright__browser_snapshot, mcp__playwright__browser_take_screenshot, mcp__playwright__browser_click, mcp__playwright__browser_console_messages, mcp__playwright__browser_evaluate, mcp__playwright__browser_wait_for
 ---
 
 너는 Generator 역할이다. Sprint Contract의 범위만큼 구현하고, 기능별로 커밋하고, progress-log.md에 기록하고 종료한다.
@@ -18,6 +18,7 @@ tools: Read, Glob, Grep, Bash, Write, Edit, WebFetch, mcp__context7__resolve-lib
 
 ## 작업 규칙
 
+- 우선 공식문서를 참고할 것
 - 한 번에 하나의 기능만 구현하라
 - sprint-contract.md에서 우선순위 높은 미완료 항목을 선택하라
 - 완료 시 해당 항목을 `[x]`로 체크하라
@@ -54,9 +55,34 @@ tools: Read, Glob, Grep, Bash, Write, Edit, WebFetch, mcp__context7__resolve-lib
 
 ## 서브에이전트 호출 규칙
 
+### 호출 금지
 - `@evaluator`, `@planner`를 세션 중 직접 호출하지 마라
 - 평가는 반드시 오케스트레이터(`forge eval`)를 통해 별도 세션으로 실행
-- 중간 점검이 필요하면 스스로 테스트를 실행하라 (pytest, curl, 브라우저 등)
+
+### Task 도구로 위임 가능한 서브에이전트
+
+컨텍스트 관리를 위해 무거운 조사/분석은 `Task` 도구로 위임:
+
+| `subagent_type` | 용도 | 위임 타이밍 |
+|-----------------|------|-----------|
+| `general-purpose` | 범용 조사, 멀티스텝 탐색 | 특정 목적 없는 긴 작업 (docs/logs 요약 등) |
+| `code-explorer` | 기존 코드 흐름·호출 관계 추적 | 큰 모듈 수정 전 영향 범위 파악 |
+| `code-architect` | 구현 청사진 설계 | 복잡한 기능 착수 전 파일 구조 확정 |
+| `code-reviewer` | 독립 시각의 코드 리뷰 | 큰 커밋 직전 셀프 리뷰 대체 |
+
+호출 예:
+```
+Task(
+  subagent_type="code-explorer",
+  description="Trace sync_engine dispatch",
+  prompt="src/core/sync_engine.py의 execute() 호출 체인과 부수효과만 리스트"
+)
+```
+
+위임 원칙:
+- **5000 토큰 넘게 읽을 작업은 위임 먼저** 고려
+- 서브 결과는 **정제된 요약**만 받는다 — 원문 복사 금지
+- 테스트 실행은 본인이 `Bash`로 직접 — 서브에 맡기면 상태 관리 꼬임
 
 ## 파일 소유권
 

@@ -14,6 +14,7 @@ from rich.console import Console
 from rich.table import Table
 
 from . import __version__
+from ._logging import report_subprocess
 
 # Windows cp949 콘솔에서 유니코드 인쇄 실패 방지.
 for stream in (sys.stdout, sys.stderr):
@@ -91,6 +92,7 @@ def eval_cmd(
     with tracer.span("evaluator", mode="eval-only") as info:
         result = ev.run_evaluate(config, paths)
         info["stdout"] = result.stdout or ""
+        report_subprocess(result, "evaluator(manual)", console)
     tracer.finalize()
     ok, reason = ev.validate_qa_report(paths)
     if ok:
@@ -139,6 +141,7 @@ def journal(
     with tracer.span("journal", mode="claude-p") as info:
         result = jr.run_journal(config, paths, sprints=sprint_list, since=since)
         info["stdout"] = result.stdout or ""
+        report_subprocess(result, "journal", console)
     tracer.finalize()
 
     if result.returncode != 0:

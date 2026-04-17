@@ -4,6 +4,9 @@
     "commit": "",
     "pr": ""
   },
+  "enabledPlugins": {
+    "feature-dev@claude-plugins-official": true
+  },
   "hooks": {
     "PostToolUse": [
       {
