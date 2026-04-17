@@ -100,6 +100,85 @@ def eval_cmd(
 
 
 @app.command()
+def journal(
+    sprint: Optional[int] = typer.Option(None, "--sprint", "-s", help="특정 스프린트만 대상"),
+    since: Optional[str] = typer.Option(None, "--since", help="ISO 날짜(YYYY-MM-DD) 이후 변경사항만"),
+    root: Optional[Path] = typer.Option(None, "--root", "-r"),
+) -> None:
+    """docs/journal.md에 사람이 읽는 엔지니어링 저널 엔트리 추가.
+
+    에러/근본원인, 결정, 팁을 artifacts/, git log에서 추출.
+    범위 미지정 시 journal.md 마지막 엔트리 이후 변경사항만 정리.
+    """
+    from .agents import journal as jr
+
+    paths = _paths(root)
+    paths.ensure_artifacts()
+    config = ForgeConfig.load(paths.project_root)
+
+    if sprint is not None and since is not None:
+        console.print("[red]--sprint와 --since는 동시에 쓸 수 없습니다.[/red]")
+        raise typer.Exit(code=2)
+
+    console.print(f"[cyan]docs/journal.md 작성 중...[/cyan]")
+    result = jr.run_journal(config, paths, sprint=sprint, since=since)
+
+    if result.returncode != 0:
+        console.print(f"[red]journal 에이전트 실행 실패 (exit={result.returncode})[/red]")
+        if result.stderr:
+            console.print(result.stderr[-2000:])
+        raise typer.Exit(code=result.returncode)
+
+    if paths.journal.exists():
+        size_kb = paths.journal.stat().st_size / 1024
+        console.print(f"[green]{paths.journal} ({size_kb:.1f} KB) 갱신 완료[/green]")
+
+        # Telegram에 최상단 엔트리 요약 + 파일 첨부
+        if config.telegram_enabled:
+            from .telegram.notifier import notify as send
+
+            title, body = _extract_latest_journal_entry(paths.journal)
+            if body:
+                preview = body if len(body) <= 900 else body[:900] + "\n\n…(이하 첨부 파일 참조)"
+                send(
+                    config,
+                    "journal",
+                    preview,
+                    file_path=paths.journal,
+                    project_name=paths.project_name,
+                )
+                console.print(f"[dim]Telegram에 저널 요약 전송됨 ({title[:60]})[/dim]")
+    else:
+        console.print("[yellow]docs/journal.md가 생성되지 않았습니다. stdout 확인:[/yellow]")
+        console.print((result.stdout or "")[-1500:])
+
+
+def _extract_latest_journal_entry(journal_path: Path) -> tuple[str, str]:
+    """docs/journal.md 최상단 `## ` 엔트리의 (제목, 본문) 반환.
+
+    본문은 제목 포함, 다음 `## ` 직전까지. 엔트리 없으면 빈 문자열 쌍.
+    """
+    if not journal_path.exists():
+        return ("", "")
+    lines = journal_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    start = -1
+    for i, line in enumerate(lines):
+        if line.startswith("## "):
+            start = i
+            break
+    if start < 0:
+        return ("", "")
+    end = len(lines)
+    for i in range(start + 1, len(lines)):
+        if lines[i].startswith("## "):
+            end = i
+            break
+    title = lines[start][3:].strip()
+    body = "\n".join(lines[start:end]).rstrip()
+    return title, body
+
+
+@app.command()
 def status(root: Optional[Path] = typer.Option(None, "--root", "-r")) -> None:
     """현재 체크포인트 및 경로 상태 출력 (v2.3: 누적 시간/토큰, 스프린트 히스토리)."""
     from .cost_tracker import parse_cost_log

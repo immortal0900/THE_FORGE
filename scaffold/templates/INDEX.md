@@ -19,6 +19,7 @@
 |------|------|
 | sprint-contract-template.md | Sprint Contract 형식 (frontmatter 필수) |
 | generator-guide.md | Generator 상세 가이드 참조 |
+| journal-guide.md | `forge journal`이 작성하는 저널 양식·톤·링크 규칙 |
 
 ## 사용 규칙
 

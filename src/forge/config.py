@@ -35,6 +35,7 @@ class ForgeConfig(BaseSettings):
     contract_max_turns: int = 12
     evaluator_max_turns: int = 20
     generator_max_turns: int = 180
+    journal_max_turns: int = 30
 
     playwright_enabled: bool = True
     playwright_timeout_seconds: int = 600
@@ -131,6 +132,7 @@ class ProjectPaths:
         self.qa_report = self.artifacts / "qa-report.md"
         self.cost_log = self.artifacts / "harness-cost-log.txt"
         self.checkpoint_file = self.artifacts / ".harness-checkpoint"
+        self.journal = self.project_root / "docs" / "journal.md"
 
         self.approval_signal = self.artifacts / ".approval-signal"
         self.skip_signal = self.artifacts / ".skip-signal"
@@ -149,6 +151,7 @@ class ProjectPaths:
     def ensure_artifacts(self) -> None:
         for path in (self.artifacts, self.specs, self.decisions, self.backup):
             path.mkdir(parents=True, exist_ok=True)
+        self.journal.parent.mkdir(parents=True, exist_ok=True)
 
     def current_sprint(self) -> int:
         """sprint-N-done.md 최대 번호 + 1. 없으면 1."""
