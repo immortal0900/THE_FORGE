@@ -26,6 +26,7 @@ Bash로 pytest, npm test, lint, 타입 체크, 서버 실행 등을 시도하라
 **Playwright 테스트 (있으면 실행):**
 - 프로젝트 루트에 `playwright.config.ts/.js/.mjs`가 있으면 오케스트레이터가 `npx playwright test`를 자동 실행하고 결과를 qa-report.md 말미에 붙인다
 - 너는 해당 섹션을 확인하고 실패가 있으면 FAIL 판정에 반영하라
+- UI 검증이 필요하면 mcp__playwright__browser_* 도구로 직접 브라우저를 띄워 확인 가능
 
 각 결과의 stdout/stderr를 근거로 기록하라.
 

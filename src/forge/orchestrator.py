@@ -425,7 +425,7 @@ def run_cycle(
                 buttons=plan_buttons,
             )
 
-            signal = wait_for_approval(paths, timeout=600)
+            signal = wait_for_approval(paths, timeout=config.approval_timeout_seconds)
             if signal == "exit":
                 cp.advance(Phase.PLANNING, "halted by user after planning")
                 cp.save(paths.checkpoint_file)
@@ -478,7 +478,7 @@ def run_cycle(
                         project_name=paths.project_name,
                         buttons=[["/resume", "/exit"]],
                     )
-                    signal = wait_for_approval(paths, timeout=600)
+                    signal = wait_for_approval(paths, timeout=config.approval_timeout_seconds)
                     if signal == "exit":
                         return 0
 
@@ -506,6 +506,7 @@ def run_cycle(
                         )
                         result = subprocess.run(
                             [claude_cli, "-p",
+                             "--agent", "generator",
                              "--max-turns", str(config.generator_max_turns),
                              "--permission-mode", "bypassPermissions",
                              initial_prompt],
@@ -568,7 +569,7 @@ def run_cycle(
                     cp.save(paths.checkpoint_file)
                     break
 
-                decision = wait_for_approval_or_stop(paths)
+                decision = wait_for_approval_or_stop(paths, timeout=config.approval_timeout_seconds)
                 if decision == "stop":
                     break
 
@@ -591,7 +592,7 @@ def run_cycle(
                     exit_code = 1
                     break
 
-                decision = wait_for_approval_or_stop(paths)
+                decision = wait_for_approval_or_stop(paths, timeout=config.approval_timeout_seconds)
                 if decision == "stop":
                     break
                 elif decision == "eval":

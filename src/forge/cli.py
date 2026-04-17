@@ -259,15 +259,12 @@ def _copy_scaffold(scaffold: Path, paths: ProjectPaths, force: bool) -> None:
     if mcp_src.exists():
         _backup_then_copy(mcp_src, paths.project_root / ".mcp.json", paths.backup, force)
 
-    agent_targets = {
-        scaffold / "agents" / "planner" / "AGENT.md":
-            paths.project_root / ".claude" / "agents" / "planner" / "AGENT.md",
-        scaffold / "agents" / "evaluator" / "AGENT.md":
-            paths.project_root / ".claude" / "agents" / "evaluator" / "AGENT.md",
-    }
-    for src, dst in agent_targets.items():
-        if src.exists():
-            _backup_then_copy(src, dst, paths.backup, force)
+    agents_src = scaffold / "agents"
+    agents_dst = paths.project_root / ".claude" / "agents"
+    if agents_src.exists():
+        agents_dst.mkdir(parents=True, exist_ok=True)
+        for src in agents_src.glob("*.md"):
+            _backup_then_copy(src, agents_dst / src.name, paths.backup, force)
 
     tpl_dir = scaffold / "templates"
     target_tpl = paths.project_root / "templates"
