@@ -3,38 +3,44 @@
 `forge journal`이 호출하는 `journal` 서브에이전트가 참고하는 양식·톤·링크 규칙 가이드.
 에이전트 본체 지시는 `.claude/agents/journal.md`에 있다. 이 파일은 **작성 예시와 실전 팁**.
 
-## 엔트리 예시 (짧은 스프린트)
+## 엔트리 예시 (연속 스프린트)
 
 ```markdown
-## 2026-04-17 — obsidian_sync — Sprint 1
+## 2026-04-17 — obsidian_sync — Sprint 1~4
+
+Obsidian ↔ Google Drive 양방향 동기화의 1차 구현을 Sprint 1~4로 마무리 (269 tests / 93% 커버리지). 네 기둥(state·drive·reconcile·lifecycle) 완성. 이월 건: watcher 예외 모니터링 공백.
 
 ### Errors & Root Causes
 
-- **`forge init` 후 `forge run` 시 scaffold/ 디렉토리를 찾을 수 없다는 에러**
-  - 원인: `pyproject.toml`의 hatch wheel 빌드 설정에 scaffold/ 가 포함돼 있지 않아 설치본에 빠졌다
-  - 해결: [pyproject.toml force-include 추가](../pyproject.toml) + [_scaffold_dir() 후보 경로 확장](../src/forge/cli.py#L190)
-  - 교훈: `uv tool install .` 대상에는 반드시 scaffold가 포함됐는지 `site-packages` 확인
+- **Sprint 1 planner 세션이 ERROR로 종료**
+  - 원인: claude-p 호출이 130초 경과 후 실패, 토큰 0 기록. 사유 로그 없음 (추정: 일시적 네트워크 문제)
+  - 해결: 재실행 — Sprint 1 evaluator 단계부터는 정상
+  - 교훈: planner 단독 실패는 산출물이 비는 형태로만 드러난다 — [harness-cost-log.txt](../artifacts/harness-cost-log.txt) 의 `ERROR` 상태를 매 스프린트 시작 전 확인
 
-- **`claude` 서브프로세스 호출 시 FileNotFoundError (Windows)**
-  - 원인: npm 전역 설치는 `claude.cmd` 배치 래퍼인데 Python subprocess는 PATHEXT 자동 탐색을 안 한다
-  - 해결: [shutil.which("claude")로 전체 경로 해석](../src/forge/agents/planner.py#L20)
-  - 교훈: 크로스플랫폼 서브프로세스는 `shutil.which` 필수
+- **`(UNCHANGED × DELETED)` 셀 no-op이 유령 drive_id 남김**
+  - 원인: spec의 "이미 없음" 문구를 문자 그대로 no-op으로 구현 → state의 `drive_id` 잔존 → 다음 로컬 수정 때 사라진 파일로 `upload(update)` 시도 → 404
+  - 해결: [reconciler.py:287](../src/reconciler.py#L287) 에서 `self._state.remove_file(path)` 호출 — commit `4b75e11`
+  - 교훈: "no-op" 셀도 state 정합성 유지를 위해 엔트리 제거까지는 수행해야 한다
 
 ### Decisions
 
-- **Generator를 interactive → `claude -p` 모드로 전환** (근거: 자동 루프에서 사용자 `/exit` 대기가 병목)
-  - 고려안: (A) interactive 유지 + 자동 exit 프롬프트, (B) stdin에 `/exit` 주입, (C) `-p` 모드
-  - 선택: C — 기능 동일(서브에이전트 Task 호출 지원), 자동 종료 보장
-  - 영향: [orchestrator.py:488](../src/forge/orchestrator.py#L488)
+- **404 정책: `DriveFileNotFoundError` + sync_engine 자동 정리** (근거: [decision-002.md](../artifacts/decisions/decision-002.md))
+  - 고려안: A) HttpError 그대로 전파, B) drive_client 내부에서 state 직접 수정(계층 위반), C) 전용 예외 + 호출자가 정리
+  - 선택: C — 의미론 명시, 정리 로직을 `sync_engine` 한 곳에 집중
+  - 영향: [drive_client.py:39](../src/drive_client.py#L39), [sync_engine.py:82](../src/sync_engine.py#L82) — commit `b4737cb`
 
 ### Tips & Gotchas
 
-- **`bypassPermissions` 없이는 `claude -p` 모드에서 Write/Bash가 조용히 거부**된다 — Telegram에 "생성됨" 알림은 오지만 실제 파일은 없음
-- **`uv tool install . --force`는 재빌드 보장이 아니다** — 소스 변경 반영하려면 `uv cache clean` 병행
+- **atomic write는 `BaseException` 핸들러로 감싸라** — [state.py:203](../src/state.py#L203) 참고. `Exception`만 잡으면 `KeyboardInterrupt` 인터럽트에서 tmp 파일이 남는다
+- **Windows signal 처리는 `loop.add_signal_handler` → `signal.signal` fallback** — [main.py:236](../src/main.py#L236) `install_signal_handlers`. `add_signal_handler`가 `NotImplementedError` 내면 전통 시그널로 전환
+
+### Carry-overs
+
+- **watcher Timer 스레드 예외 모니터링 공백** — [local_watcher.py](../src/local_watcher.py) `_fire_change`가 `logger.exception`로 삼키는데, 모니터링 연결은 Sprint 5 이후 과제
 
 ### Performance Notes
 
-- 이번 스프린트 누적 10분 4초 / 입력 1.2M 토큰 — 정상 범위
+- **sprint-3 generator 세션 986.8s** — 4커밋을 한 세션에 담아 평균 대비 큼. 다음엔 "커밋 3~4개 = 1세션" 상한 가이드 적용
 ```
 
 ## 안 좋은 엔트리 예시 (피해야 할 것)

@@ -37,44 +37,72 @@ tools: Read, Glob, Grep, Bash, Write, Edit
 
 ## 엔트리 포맷 (엄수)
 
-엔트리 헤더는 `## <날짜> — <프로젝트명> — <범위>` 형식.
+### 헤더
+
+```
+## <날짜> — <프로젝트명> — <범위>
+```
 
 - 날짜: `YYYY-MM-DD`
-- 프로젝트명: 오케스트레이터가 프롬프트로 전달하는 값 그대로 (보통 프로젝트 루트 폴더명)
-- 범위:
-  - 스프린트 지정: `Sprint N`
-  - 날짜 이후: `since YYYY-MM-DD`
-  - 자동(마지막 엔트리 이후): 생략 — `## <날짜> — <프로젝트명>`
+- 프로젝트명: 오케스트레이터가 프롬프트로 전달하는 값 그대로
+- 범위 표기:
+  - 단일 스프린트: `Sprint 3`
+  - 연속 스프린트: `Sprint 1~4` (물결표)
+  - 불연속 스프린트: `Sprint 1, 3, 5` (쉼표)
+  - 날짜 이후: `since 2026-04-15`
+  - 자동(마지막 엔트리 이후): 생략 — `## 2026-04-17 — obsidian_sync`
 
-예: `## 2026-04-17 — obsidian_sync — Sprint 1`
+### 한 줄 요약 (헤더 바로 아래, 빈 줄 하나 띄고)
+
+전체 맥락을 **1~3 문장**으로 먼저 제시한다. 기술 스택 결론, 완료한 기둥, 미처리 이월 건을 포함.
+
+예: _"Obsidian ↔ Google Drive 양방향 동기화의 1차 구현을 Sprint 1~4로 완료 (총 269 tests / 커버리지 93%). 네 기둥(state·drive·reconcile·lifecycle) 완성. 이월 건: watcher 예외 모니터링 공백."_
+
+### 본문 구조
 
 ```markdown
-## YYYY-MM-DD — <project> — Sprint N
+## 2026-04-17 — obsidian_sync — Sprint 1~4
+
+Obsidian ↔ Google Drive 양방향 동기화의 1차 구현이 Sprint 1~4로 완료됐다 (269 tests / 93% 커버리지).
 
 ### Errors & Root Causes
 
-- **증상 한 줄 요약 (짧고 직관적인 영어)**
-  - 원인: 한 문장 또는 두 문장
-  - 해결: [commit abc1234](commit-url-or-sha) / [file:line](relative/path.py#L42)
-  - 교훈: 재발 방지 포인트 한 줄
+- **증상 한 줄 요약**
+  - 원인: 한두 문장 근본 원인
+  - 해결: [파일:라인](../src/x.py#L42) 에서 `함수_이름()` 호출 — commit `abc1234`
+  - 교훈: 재발 방지 포인트
 
 ### Decisions
 
-- **결정 제목** (근거: [decision-NNN.md](../artifacts/decisions/decision-NNN.md))
+- **결정 제목** (근거: [decision-003.md](../artifacts/decisions/decision-003.md))
   - 고려안: A / B / C
   - 선택: C — 이유 한 줄
-  - 영향: [변경된 파일](relative/path.py#L10)
+  - 영향: [변경된 파일](../src/y.py#L10)
 
 ### Tips & Gotchas
 
-- **함정 한 줄** — [관련 코드 또는 설정](relative/path#Lxx)
+- **함정 한 줄** — [관련 코드](../src/z.py#L10) 참고
 - **효과적이었던 패턴** — 다음 프로젝트에 이식 가능한 지식만
 
-### Performance Notes (있을 때만 섹션 표시)
+### Carry-overs (이월, 있을 때만)
 
-- **비용 이상치**: agent X가 평균 대비 N배 소요 — 원인 추정
+- **이월 건 제목** — 미처리 이유, 다음 스프린트에서 체크할 파일
+- 다음 저널 엔트리에서 이 목록이 해소됐는지 되짚는다
+
+### Performance Notes (이상치 있을 때만)
+
+- **비용 이상치**: `generator` 세션 평균 대비 N배 소요 — 커밋 M개 집중 (추정)
 - **토큰 집중**: Y 단계에서 입력 M토큰 — 맥락
 ```
+
+### 커밋 참조 규칙 (중요)
+
+로컬 리포는 커밋 해시에 대한 공식 URL이 없어 **해시를 링크로 걸면 엉뚱한 파일로 이동**한다.
+
+- ❌ 금지: `커밋 [4b75e11](../src/x.py)` (해시 라벨인데 링크는 파일로 감 — 혼란)
+- ✅ 권장: `[파일:라인](../src/x.py#L42) — commit \`4b75e11\``
+  - 파일 링크는 클릭 가능, 커밋 해시는 검색 가능한 백틱 코드
+- 파일 링크와 커밋 해시를 한 줄에 병기할 때는 **em dash `—`** 로 구분
 
 ## 링크 규칙 (엄수)
 

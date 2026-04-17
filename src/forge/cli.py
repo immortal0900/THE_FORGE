@@ -101,7 +101,8 @@ def eval_cmd(
 
 @app.command()
 def journal(
-    sprint: Optional[int] = typer.Option(None, "--sprint", "-s", help="특정 스프린트만 대상"),
+    sprint: Optional[int] = typer.Option(None, "--sprint", "-s", help="단일 스프린트 번호"),
+    sprints: Optional[str] = typer.Option(None, "--sprints", help="범위(`1-4`) 또는 쉼표 목록(`1,3,5`)"),
     since: Optional[str] = typer.Option(None, "--since", help="ISO 날짜(YYYY-MM-DD) 이후 변경사항만"),
     root: Optional[Path] = typer.Option(None, "--root", "-r"),
 ) -> None:
@@ -116,12 +117,23 @@ def journal(
     paths.ensure_artifacts()
     config = ForgeConfig.load(paths.project_root)
 
-    if sprint is not None and since is not None:
-        console.print("[red]--sprint와 --since는 동시에 쓸 수 없습니다.[/red]")
+    specified = sum(x is not None for x in (sprint, sprints, since))
+    if specified > 1:
+        console.print("[red]--sprint / --sprints / --since 중 하나만 지정할 수 있습니다.[/red]")
         raise typer.Exit(code=2)
 
-    console.print(f"[cyan]docs/journal.md 작성 중...[/cyan]")
-    result = jr.run_journal(config, paths, sprint=sprint, since=since)
+    sprint_list: Optional[list[int]] = None
+    if sprint is not None:
+        sprint_list = [sprint]
+    elif sprints:
+        try:
+            sprint_list = _parse_sprint_range(sprints)
+        except ValueError as e:
+            console.print(f"[red]--sprints 파싱 실패: {e}[/red]")
+            raise typer.Exit(code=2) from None
+
+    console.print("[cyan]docs/journal.md 작성 중...[/cyan]")
+    result = jr.run_journal(config, paths, sprints=sprint_list, since=since)
 
     if result.returncode != 0:
         console.print(f"[red]journal 에이전트 실행 실패 (exit={result.returncode})[/red]")
@@ -161,6 +173,26 @@ def journal(
         if err:
             console.print("[dim]--- stderr tail ---[/dim]")
             console.print(err)
+
+
+def _parse_sprint_range(raw: str) -> list[int]:
+    """`1-4` → [1,2,3,4], `1,3,5` → [1,3,5], `1-3,5` → [1,2,3,5]."""
+    result: set[int] = set()
+    for token in raw.split(","):
+        token = token.strip()
+        if not token:
+            continue
+        if "-" in token:
+            a, b = token.split("-", 1)
+            lo, hi = int(a), int(b)
+            if lo > hi:
+                raise ValueError(f"범위 시작이 끝보다 큽니다: {token}")
+            result.update(range(lo, hi + 1))
+        else:
+            result.add(int(token))
+    if not result:
+        raise ValueError("비어있는 범위")
+    return sorted(result)
 
 
 def _extract_latest_journal_entry(journal_path: Path) -> tuple[str, str]:

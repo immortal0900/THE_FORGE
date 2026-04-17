@@ -42,29 +42,41 @@ def _run_claude_agent(
 def run_journal(
     config: ForgeConfig,
     paths: ProjectPaths,
-    sprint: Optional[int] = None,
+    sprints: Optional[list[int]] = None,
     since: Optional[str] = None,
 ) -> CompletedProcess:
     """docs/journal.md에 새 엔트리 작성.
 
-    scope 우선순위: sprint > since > 자동(파일 마지막 엔트리 이후).
+    scope 우선순위: sprints > since > 자동(파일 마지막 엔트리 이후).
     """
-    if sprint is not None:
+    if sprints:
+        nums = sorted(set(sprints))
+        is_contiguous = len(nums) > 1 and all(nums[i] + 1 == nums[i + 1] for i in range(len(nums) - 1))
+        if len(nums) == 1:
+            range_label = f"Sprint {nums[0]}"
+        elif is_contiguous:
+            range_label = f"Sprint {nums[0]}~{nums[-1]}"
+        else:
+            range_label = "Sprint " + ", ".join(str(n) for n in nums)
+        files_hint = ", ".join(f"sprint-{n}-done.md" for n in nums)
         scope_line = (
-            f"범위: Sprint {sprint} 한정. "
-            f"artifacts/sprint-{sprint}-done.md 가 있으면 그 시점의 QA/결정/진행 기록을 중심으로, "
-            f"없으면 현재 artifacts/*의 Sprint {sprint} 관련 내용으로 작성하라."
+            f"범위: {range_label}. "
+            f"artifacts/{{{files_hint}}} 중 존재하는 파일들을 주요 자료로 사용하고, "
+            f"없는 파일은 현재 artifacts/*에서 해당 스프린트 관련 내용을 추출하라. "
+            f"엔트리 헤더의 범위 표기는 정확히 `{range_label}`."
         )
     elif since:
         scope_line = (
             f"범위: {since} 이후 변경사항. "
             f"git log --since={since} --oneline --no-merges 로 커밋 범위 파악 후, "
-            f"해당 기간에 걸친 artifacts 변화를 요약하라."
+            f"해당 기간에 걸친 artifacts 변화를 요약하라. "
+            f"엔트리 헤더의 범위 표기는 `since {since}`."
         )
     else:
         scope_line = (
             "범위: 자동. docs/journal.md 최상단 엔트리의 날짜 이후의 새 변경사항만 정리. "
-            "파일이 없거나 비어있으면 전체 이력을 대상으로 한다."
+            "파일이 없거나 비어있으면 전체 이력을 대상으로 한다. "
+            "자동 모드에서는 엔트리 헤더 범위 표기를 생략한다."
         )
 
     prompt = (
