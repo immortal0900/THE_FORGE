@@ -112,6 +112,7 @@ def journal(
     범위 미지정 시 journal.md 마지막 엔트리 이후 변경사항만 정리.
     """
     from .agents import journal as jr
+    from .cost_tracker import SprintTracer
 
     paths = _paths(root)
     paths.ensure_artifacts()
@@ -133,7 +134,12 @@ def journal(
             raise typer.Exit(code=2) from None
 
     console.print("[cyan]docs/journal.md 작성 중...[/cyan]")
-    result = jr.run_journal(config, paths, sprints=sprint_list, since=since)
+    sprint_num = paths.current_sprint()
+    tracer = SprintTracer(config, sprint_num, paths.project_name, paths.cost_log)
+    with tracer.span("journal", mode="claude-p") as info:
+        result = jr.run_journal(config, paths, sprints=sprint_list, since=since)
+        info["stdout"] = result.stdout or ""
+    tracer.finalize()
 
     if result.returncode != 0:
         console.print(f"[red]journal 에이전트 실행 실패 (exit={result.returncode})[/red]")
