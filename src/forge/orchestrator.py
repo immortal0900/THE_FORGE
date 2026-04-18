@@ -19,8 +19,7 @@ from .agents import planner as pl
 from .checkpoint import Checkpoint, Phase
 from .config import ForgeConfig, ProjectPaths
 from .cost_tracker import SprintTracer, parse_cost_log
-from .telegram.notifier import notify
-from .telegram.receiver import TelegramReceiver
+from .notifier import NotifierAdapter, get_notifier
 
 console = Console()
 
@@ -226,7 +225,7 @@ def _extract_scores_from_qa_report(paths: ProjectPaths) -> dict[str, int]:
 
 
 def _notify_pass_with_next(
-    config: ForgeConfig,
+    notifier: NotifierAdapter,
     tracer: SprintTracer,
     sprint_num: int,
     paths: ProjectPaths,
@@ -271,14 +270,15 @@ def _notify_pass_with_next(
         f"/stop — 여기서 중단\n"
         f"/status — 상세 상태"
     )
-    notify(
-        config, "sprint_pass_next", msg,
+    notifier.notify(
+        "sprint_pass_next", msg,
         file_path=paths.qa_report, project_name=paths.project_name,
         buttons=[["/resume", "/stop"], ["/status"]],
     )
 
 
 def _notify_fail_with_options(
+    notifier: NotifierAdapter,
     config: ForgeConfig,
     tracer: SprintTracer,
     sprint_num: int,
@@ -304,15 +304,15 @@ def _notify_fail_with_options(
         f"/eval — Evaluator 재실행\n"
         f"/stop — 여기서 중단"
     )
-    notify(
-        config, "qa_fail", msg,
+    notifier.notify(
+        "qa_fail", msg,
         file_path=paths.qa_report, project_name=paths.project_name,
         buttons=[["/resume", "/eval"], ["/stop"]],
     )
 
 
 def _notify_project_complete(
-    config: ForgeConfig,
+    notifier: NotifierAdapter,
     tracer: SprintTracer,
     paths: ProjectPaths,
     total_sprints: int,
@@ -338,7 +338,7 @@ def _notify_project_complete(
         f"spec.md의 모든 스프린트가 구현 완료되었습니다.\n"
         f"추가 작업이 필요하면 spec.md에 새 스프린트 추가 후 forge run."
     )
-    notify(config, "project_complete", msg, project_name=paths.project_name)
+    notifier.notify("project_complete", msg, project_name=paths.project_name)
 
 
 # ── 메인 사이클 ─────────────────────────────────────────────────────────────
@@ -378,8 +378,8 @@ def run_cycle(
         cp = Checkpoint(phase=target_prev, detail=f"forced from {from_phase.name}")
         cp.save(paths.checkpoint_file)
 
-    receiver = TelegramReceiver(config, paths)
-    receiver.start()
+    notifier = get_notifier(config, paths)
+    notifier.start()
 
     exit_code = 0
     try:
@@ -397,7 +397,7 @@ def run_cycle(
             with tracer.span("planner") as info:
                 if not paths.spec.exists():
                     if not request:
-                        notify(config, "error", "spec.md가 없고 요청도 없습니다.", project_name=paths.project_name)
+                        notifier.notify("error", "spec.md가 없고 요청도 없습니다.", project_name=paths.project_name)
                         return 2
                     result = pl.run_generate(request, config, paths)
                     info["stdout"] = result.stdout or ""
@@ -411,8 +411,8 @@ def run_cycle(
             specs_after = set(paths.specs.glob("*.md")) if paths.specs.exists() else set()
             new_specs = specs_after - specs_before
             for spec_file in sorted(new_specs):
-                notify(
-                    config, "spec_detail",
+                notifier.notify(
+                    "spec_detail",
                     f"도메인 상세 스펙: {spec_file.name}",
                     file_path=spec_file, project_name=paths.project_name,
                 )
@@ -423,8 +423,7 @@ def run_cycle(
                 if status == "READY"
                 else [["/skip", "/resume"], ["/exit"]]
             )
-            notify(
-                config,
+            notifier.notify(
                 "planner_done" if status == "READY" else "plan_revision",
                 f"plan-review.md 상태: {status}",
                 file_path=paths.plan_review if paths.plan_review.exists() else paths.spec,
@@ -455,16 +454,16 @@ def run_cycle(
             # 안전장치 체크
             effective_max = max_sprints if max_sprints is not None else config.max_total_sprints
             if sprints_run >= effective_max:
-                notify(config, "auto_stop", f"최대 스프린트 수 {effective_max} 도달 — 자동 중단", project_name=paths.project_name)
+                notifier.notify("auto_stop", f"최대 스프린트 수 {effective_max} 도달 — 자동 중단", project_name=paths.project_name)
                 break
 
             if consecutive_fails >= config.max_consecutive_fails:
-                notify(config, "auto_stop", f"{config.max_consecutive_fails}회 연속 FAIL — 자동 중단", file_path=paths.qa_report, project_name=paths.project_name)
+                notifier.notify("auto_stop", f"{config.max_consecutive_fails}회 연속 FAIL — 자동 중단", file_path=paths.qa_report, project_name=paths.project_name)
                 break
 
             total_mins = parse_cost_log(paths.cost_log)
             if total_mins > config.max_total_minutes:
-                notify(config, "budget_exceeded", f"누적 {total_mins:.0f}분 > {config.max_total_minutes}분 — 자동 중단", file_path=paths.cost_log, project_name=paths.project_name)
+                notifier.notify("budget_exceeded", f"누적 {total_mins:.0f}분 > {config.max_total_minutes}분 — 자동 중단", file_path=paths.cost_log, project_name=paths.project_name)
                 break
 
             # Phase 2: Sprint Contract
@@ -478,8 +477,7 @@ def run_cycle(
 
                 # 첫 Sprint Contract만 승인 대기
                 if sprint_num == 1:
-                    notify(
-                        config,
+                    notifier.notify(
                         "sprint_contract",
                         f"Sprint {sprint_num} contract 생성됨.",
                         file_path=paths.sprint_contract if paths.sprint_contract.exists() else None,
@@ -497,7 +495,7 @@ def run_cycle(
             if cp.should_run(Phase.GENERATING):
                 cp.advance(Phase.GENERATING, "generator running")
                 cp.save(paths.checkpoint_file)
-                notify(config, "generator_start", f"Sprint {sprint_num} Generator 세션 시작.", project_name=paths.project_name)
+                notifier.notify("generator_start", f"Sprint {sprint_num} Generator 세션 시작.", project_name=paths.project_name)
                 with sprint_tracer.span("generator", mode="claude-p") as info:
                     try:
                         claude_cli = shutil.which("claude") or "claude"
@@ -528,12 +526,12 @@ def run_cycle(
                     except KeyboardInterrupt:
                         pass
                     except subprocess.TimeoutExpired:
-                        notify(config, "warning", f"Generator 시간 초과 ({config.max_generator_minutes}분).", project_name=paths.project_name)
+                        notifier.notify("warning", f"Generator 시간 초과 ({config.max_generator_minutes}분).", project_name=paths.project_name)
                     except FileNotFoundError:
-                        notify(config, "error", "claude CLI를 찾을 수 없습니다.", project_name=paths.project_name)
+                        notifier.notify("error", "claude CLI를 찾을 수 없습니다.", project_name=paths.project_name)
                         return 3
-                notify(
-                    config, "generator_end", "Generator 세션 종료.",
+                notifier.notify(
+                    "generator_end", "Generator 세션 종료.",
                     file_path=paths.progress_log if paths.progress_log.exists() else None,
                     project_name=paths.project_name,
                 )
@@ -550,14 +548,14 @@ def run_cycle(
                         info["stdout"] = result.stdout or ""
                         report_subprocess(result, f"evaluator sprint-{sprint_num}", console)
                 except Exception as e:
-                    notify(config, "error", f"Evaluator 실행 중 예외: {e}", project_name=paths.project_name)
+                    notifier.notify("error", f"Evaluator 실행 중 예외: {e}", project_name=paths.project_name)
                 cp.advance(Phase.EVALUATING_DONE, "evaluation complete")
                 cp.save(paths.checkpoint_file)
 
             # Phase 5: 결과 판단
             ok, reason = ev.validate_qa_report(paths)
             if not ok:
-                notify(config, "warning", f"qa-report.md 검증 실패: {reason}", project_name=paths.project_name)
+                notifier.notify("warning", f"qa-report.md 검증 실패: {reason}", project_name=paths.project_name)
                 exit_code = 4
                 break
 
@@ -567,12 +565,12 @@ def run_cycle(
                 has_next = _parse_has_next_sprint(paths)
 
                 if not has_next:
-                    _notify_project_complete(config, sprint_tracer, paths, sprint_num)
+                    _notify_project_complete(notifier, sprint_tracer, paths, sprint_num)
                     cp.advance(Phase.NONE, f"project complete at sprint-{sprint_num}")
                     cp.save(paths.checkpoint_file)
                     break
 
-                _notify_pass_with_next(config, sprint_tracer, sprint_num, paths)
+                _notify_pass_with_next(notifier, sprint_tracer, sprint_num, paths)
 
                 if single_sprint:
                     cp.advance(Phase.NONE, f"sprint-{sprint_num} done (single-sprint mode)")
@@ -596,7 +594,7 @@ def run_cycle(
                 cp = Checkpoint(phase=Phase.CONTRACT_DONE, detail=f"sprint-{sprint_num} FAIL, reset to contract_done")
                 cp.save(paths.checkpoint_file)
 
-                _notify_fail_with_options(config, sprint_tracer, sprint_num, paths, consecutive_fails)
+                _notify_fail_with_options(notifier, config, sprint_tracer, sprint_num, paths, consecutive_fails)
 
                 if single_sprint:
                     exit_code = 1
@@ -615,7 +613,7 @@ def run_cycle(
                             report_subprocess(result, f"evaluator-rerun sprint-{sprint_num}", console)
                             info["stdout"] = result.stdout or ""
                     except Exception as e:
-                        notify(config, "error", f"Evaluator 재실행 중 예외: {e}", project_name=paths.project_name)
+                        notifier.notify("error", f"Evaluator 재실행 중 예외: {e}", project_name=paths.project_name)
                     cp.advance(Phase.EVALUATING_DONE, "re-evaluation complete")
                     cp.save(paths.checkpoint_file)
                     continue  # Phase 5로 돌아가 다시 판정
@@ -625,6 +623,6 @@ def run_cycle(
             sprint_tracer.finalize()
 
     finally:
-        receiver.stop()
+        notifier.stop()
 
     return exit_code

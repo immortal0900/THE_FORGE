@@ -1,7 +1,7 @@
 """설정 로드 + ProjectPaths.
 
-v2.2: .env(비밀) + pyproject.toml [tool.forge](공유) + forge.toml(레거시 하위호환).
-우선순위: 환경변수 (FORGE_*) > .env > forge.toml [forge] > pyproject.toml [tool.forge] > 기본값.
+v2.4: .env(프로젝트) + ~/.forge/config.env(전역) + pyproject.toml [tool.forge](공유).
+우선순위: 환경변수 (FORGE_*) > 프로젝트 .env > ~/.forge/config.env > forge.toml [forge] > pyproject.toml [tool.forge] > 자동 추론 > 기본값.
 """
 
 from __future__ import annotations
@@ -11,18 +11,39 @@ from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from .autoinfer import infer_bot_display_name, infer_project_name
+
+
+def _global_config_path() -> Path:
+    return Path.home() / ".forge" / "config.env"
+
 
 class ForgeConfig(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="FORGE_",
-        env_file=".env",
+        env_file=(str(_global_config_path()), ".env"),  # 뒤쪽이 우선 (프로젝트 .env가 전역 override)
         env_file_encoding="utf-8",
         extra="ignore",
     )
 
-    # ── 비밀 (.env에서 로드) ──
+    # ── 프로젝트 식별 ──
+    project_name: str = ""           # 비어있으면 디렉토리명에서 추론
+    bot_display_name: str = ""       # 비어있으면 Forge-{PascalCase(project_name)}
+    bot_emoji: str = ":hammer_and_wrench:"
+
+    # ── 알림 백엔드 선택 ──
+    notifier_backend: str = "telegram"   # "telegram" | "slack"
+
+    # ── Telegram (프로젝트 .env에서 로드) ──
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
+
+    # ── Slack (~/.forge/config.env에서 전역 공유 권장) ──
+    slack_bot_token: str = ""
+    slack_app_token: str = ""
+    slack_channel: str = ""
+
+    # ── Langfuse (~/.forge/config.env에서 전역 공유 권장) ──
     langfuse_public_key: str = ""
     langfuse_secret_key: str = ""
     langfuse_host: str = "https://cloud.langfuse.com"
@@ -53,19 +74,35 @@ class ForgeConfig(BaseSettings):
         return bool(self.telegram_bot_token and self.telegram_chat_id)
 
     @property
+    def slack_enabled(self) -> bool:
+        return bool(self.slack_bot_token and self.slack_app_token and self.slack_channel)
+
+    @property
     def langfuse_enabled(self) -> bool:
         return bool(self.langfuse_public_key and self.langfuse_secret_key)
+
+    def resolved_project_name(self, project_root: Path) -> str:
+        return self.project_name or infer_project_name(project_root)
+
+    def resolved_display_name(self, project_root: Path) -> str:
+        if self.bot_display_name:
+            return self.bot_display_name
+        return infer_bot_display_name(self.resolved_project_name(project_root))
 
     @classmethod
     def load(cls, project_root: Path) -> "ForgeConfig":
         """환경변수 우선, 그 뒤 TOML에서 비어있지 않은 값만 덮어씀.
 
-        우선순위: 환경변수 (FORGE_*) > .env > forge.toml [forge] > pyproject.toml [tool.forge] > 기본값.
+        env_file 튜플 순서: (~/.forge/config.env, 프로젝트/.env) — 뒤쪽이 우선.
         """
-        env_file = Path(project_root) / ".env"
-        base = cls(_env_file=str(env_file) if env_file.exists() else None)
+        global_env = _global_config_path()
+        project_env = Path(project_root) / ".env"
+        env_files: tuple[str, ...] = tuple(
+            str(p) for p in (global_env, project_env) if p.exists()
+        )
+        base = cls(_env_file=env_files if env_files else None)
 
-        # pyproject.toml [tool.forge] (v2.2 신규) → forge.toml [forge] (레거시) 순으로 읽기
+        # pyproject.toml [tool.forge] → forge.toml [forge] 순으로 읽기
         overrides: dict = {}
         pyproject_path = project_root / "pyproject.toml"
         forge_toml_path = project_root / "forge.toml"
@@ -82,7 +119,6 @@ class ForgeConfig(BaseSettings):
         if forge_toml_path.exists():
             try:
                 data = tomllib.loads(forge_toml_path.read_text(encoding="utf-8"))
-                # forge.toml 값이 pyproject.toml보다 우선 (레거시 호환)
                 overrides.update(data.get("forge", {}))
             except Exception:
                 pass

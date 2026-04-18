@@ -23,8 +23,10 @@ for stream in (sys.stdout, sys.stderr):
             stream.reconfigure(encoding="utf-8", errors="replace")
         except Exception:
             pass
+from .autoinfer import infer_project_name  # noqa: E402
 from .checkpoint import Checkpoint, Phase  # noqa: E402
 from .config import ForgeConfig, ProjectPaths  # noqa: E402
+from . import registry as _registry  # noqa: E402
 
 app = typer.Typer(name="forge", help=f"THE FORGE v{__version__} - 범용 하네스 오케스트레이터")
 console = Console(force_terminal=True, legacy_windows=False)
@@ -154,21 +156,21 @@ def journal(
         size_kb = paths.journal.stat().st_size / 1024
         console.print(f"[green]{paths.journal} ({size_kb:.1f} KB) 갱신 완료[/green]")
 
-        # Telegram에 최상단 엔트리 요약 + 파일 첨부
-        if config.telegram_enabled:
-            from .telegram.notifier import notify as send
+        # 활성 백엔드(Telegram/Slack)에 최상단 엔트리 요약 + 파일 첨부
+        from .notifier import get_notifier
 
+        notifier = get_notifier(config, paths)
+        if notifier.enabled:
             title, body = _extract_latest_journal_entry(paths.journal)
             if body:
                 preview = body if len(body) <= 900 else body[:900] + "\n\n…(이하 첨부 파일 참조)"
-                send(
-                    config,
+                notifier.notify(
                     "journal",
                     preview,
                     file_path=paths.journal,
                     project_name=paths.project_name,
                 )
-                console.print(f"[dim]Telegram에 저널 요약 전송됨 ({title[:60]})[/dim]")
+                console.print(f"[dim]{config.notifier_backend}에 저널 요약 전송됨 ({title[:60]})[/dim]")
     else:
         console.print(
             "[yellow]docs/journal.md가 생성되지 않았습니다 — 에이전트가 파일 작성 전에 턴 소진했을 가능성.[/yellow]\n"
@@ -248,7 +250,9 @@ def status(root: Optional[Path] = typer.Option(None, "--root", "-r")) -> None:
     table.add_row("timestamp", cp.timestamp)
     table.add_row("sprint (next)", str(paths.current_sprint()))
     table.add_row("누적 시간", f"{total_mins:.0f}분")
+    table.add_row("notifier_backend", config.notifier_backend)
     table.add_row("telegram_enabled", str(config.telegram_enabled))
+    table.add_row("slack_enabled", str(config.slack_enabled))
     table.add_row("langfuse_enabled", str(config.langfuse_enabled))
     for p in (paths.spec, paths.plan_review, paths.sprint_contract, paths.qa_report):
         table.add_row(p.name, "OK" if p.exists() else "-")
@@ -268,12 +272,29 @@ def status(root: Optional[Path] = typer.Option(None, "--root", "-r")) -> None:
 
 
 @app.command()
+def setup(
+    reset: bool = typer.Option(False, "--reset", help="기존 ~/.forge/config.env 값을 무시하고 새로 입력"),
+) -> None:
+    """전역 설정 마법사 — ~/.forge/config.env에 Slack/Langfuse 토큰을 한 번만 저장.
+
+    이후 모든 프로젝트의 ForgeConfig가 이 파일을 자동으로 읽어 사용한다.
+    """
+    from .setup_wizard import run_setup
+
+    run_setup(reset=reset)
+
+
+@app.command()
 def init(
     template: Optional[str] = typer.Option(None, "--template", help="도메인 템플릿(미사용 예약)"),
     force: bool = typer.Option(False, "--force", "-f", help="기존 파일을 .backup/에 백업 후 덮어쓰기"),
     root: Optional[Path] = typer.Option(None, "--root", "-r"),
 ) -> None:
-    """프로젝트 부트스트랩 (scaffold 복사 + .env + pyproject.toml [tool.forge])."""
+    """프로젝트 부트스트랩 (scaffold 복사 + 최소 .env + pyproject.toml [tool.forge]).
+
+    Slack/Langfuse 토큰은 `forge setup`의 ~/.forge/config.env에서 자동 로드되므로
+    프로젝트 .env는 FORGE_PROJECT_NAME 한 줄로 최소화된다.
+    """
     paths = _paths(root)
     paths.ensure_artifacts()
     scaffold = _scaffold_dir()
@@ -281,18 +302,48 @@ def init(
         console.print(f"[red]scaffold/ 디렉토리를 찾을 수 없습니다: {scaffold}[/red]")
         raise typer.Exit(code=5)
 
+    # 프로젝트명 추론 + 중복 검사
+    inferred = infer_project_name(paths.project_root)
+    collision = _registry.check_collision(inferred, paths.project_root)
+    final_name = inferred
+    if collision:
+        console.print(
+            f"\n[yellow]⚠️ 프로젝트명 '{inferred}'는 이미 "
+            f"[bold]{collision.get('path')}[/bold]에 등록돼 있습니다.[/yellow]"
+        )
+        console.print(f"   현재 경로: [dim]{paths.project_root}[/dim]")
+        parent_tag = infer_project_name(paths.project_root.parent) or "alt"
+        suggested = f"{inferred}_{parent_tag}"
+        new_name = typer.prompt(
+            f"새 이름을 입력하세요 (엔터 시 '{suggested}' 사용)",
+            default="",
+            show_default=False,
+        )
+        final_name = (new_name or suggested).strip() or suggested
+        console.print(f"   [green]→ 프로젝트명: {final_name}[/green]")
+
+    _registry.register_project(final_name, paths.project_root)
+
     _copy_scaffold(scaffold, paths, force=force)
     _merge_claude_settings(scaffold, paths, force=force)
-    _ensure_env_and_pyproject(paths, force=force)
+    _ensure_env_and_pyproject(paths, project_name=final_name, force=force)
     _ensure_gitignore(paths)
 
-    console.print("[green]forge init 완료.[/green]")
-    console.print(
-        "\n[bold]다음 단계:[/bold]\n"
-        "  1. .env에 FORGE_TELEGRAM_BOT_TOKEN, FORGE_TELEGRAM_CHAT_ID 입력\n"
-        "  2. (선택) .env에 FORGE_LANGFUSE_* 키 입력\n"
-        "  3. forge run \"요청 내용\" 으로 첫 사이클 실행\n"
-    )
+    console.print(f"\n[green]forge init 완료. (project_name: {final_name})[/green]")
+
+    global_cfg = Path.home() / ".forge" / "config.env"
+    if global_cfg.exists():
+        console.print(f"[dim]전역 설정 로드: {global_cfg}[/dim]")
+        console.print(
+            "\n[bold]다음 단계:[/bold]\n"
+            "  forge run \"요청 내용\" 으로 첫 사이클 실행\n"
+        )
+    else:
+        console.print(
+            "\n[yellow]⚠️ 전역 설정 파일이 없습니다.[/yellow]\n"
+            "  [bold]1.[/bold] `forge setup` 실행 — Slack/Langfuse 토큰 입력 (최초 1회)\n"
+            "  [bold]2.[/bold] `forge run \"요청 내용\"`\n"
+        )
 
 
 @app.command()
@@ -302,12 +353,13 @@ def notify(
     file_path: Optional[Path] = typer.Argument(None, help="첨부 파일 (선택)"),
     root: Optional[Path] = typer.Option(None, "--root", "-r"),
 ) -> None:
-    """Hooks용 알림 유틸리티."""
-    from .telegram.notifier import notify as send
+    """Hooks용 알림 유틸리티. 활성 백엔드(Telegram/Slack)로 일회성 알림 전송."""
+    from .notifier import get_notifier
 
     paths = _paths(root)
     config = ForgeConfig.load(paths.project_root)
-    send(config, event_type, message, file_path=file_path, project_name=paths.project_name)
+    notifier = get_notifier(config, paths)
+    notifier.notify(event_type, message, file_path=file_path, project_name=paths.project_name)
 
 
 @app.command(name="update-templates")
@@ -478,21 +530,31 @@ def _merge_claude_settings(scaffold: Path, paths: ProjectPaths, force: bool) -> 
         target.write_text(json.dumps(new_data, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
-def _ensure_env_and_pyproject(paths: ProjectPaths, force: bool) -> None:
-    """v2.2: .env 파일 생성 + pyproject.toml [tool.forge] 섹션 추가."""
-    # .env 생성
+def _ensure_env_and_pyproject(
+    paths: ProjectPaths,
+    project_name: str = "",
+    force: bool = False,
+) -> None:
+    """v2.4: 최소 .env 파일 생성 + pyproject.toml [tool.forge] 섹션 추가.
+
+    .env는 FORGE_PROJECT_NAME 한 줄만. 토큰은 ~/.forge/config.env에서 자동 로드.
+    """
+    # .env 생성 (프로젝트명만)
     env_target = paths.project_root / ".env"
+    resolved_name = project_name or paths.project_root.name
     if not env_target.exists() or force:
         if env_target.exists():
             paths.backup.mkdir(parents=True, exist_ok=True)
             shutil.copy2(env_target, paths.backup / ".env.bak")
         env_content = (
-            "# THE FORGE secrets (do not commit)\n"
-            'FORGE_TELEGRAM_BOT_TOKEN=""\n'
-            'FORGE_TELEGRAM_CHAT_ID=""\n'
-            'FORGE_LANGFUSE_PUBLIC_KEY=""\n'
-            'FORGE_LANGFUSE_SECRET_KEY=""\n'
-            'FORGE_LANGFUSE_HOST="https://cloud.langfuse.com"\n'
+            "# THE FORGE — 프로젝트 고유값\n"
+            "# 전역 토큰은 ~/.forge/config.env에서 자동 로드됩니다 (forge setup으로 생성).\n"
+            "# 이 프로젝트만 다른 백엔드/채널을 쓰려면 아래 주석을 해제하고 값 입력.\n"
+            f'FORGE_PROJECT_NAME="{resolved_name}"\n'
+            "# FORGE_NOTIFIER_BACKEND=\"telegram\"\n"
+            "# FORGE_SLACK_CHANNEL=\"\"\n"
+            "# FORGE_TELEGRAM_BOT_TOKEN=\"\"\n"
+            "# FORGE_TELEGRAM_CHAT_ID=\"\"\n"
         )
         env_target.write_text(env_content, encoding="utf-8")
 

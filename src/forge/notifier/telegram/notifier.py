@@ -8,7 +8,7 @@ from typing import Optional
 
 import httpx
 
-from ..config import ForgeConfig
+from ...config import ForgeConfig
 
 EMOJI = {
     "planner_done": "📋",

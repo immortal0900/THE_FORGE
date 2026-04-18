@@ -7,7 +7,7 @@ from typing import Optional
 
 import httpx
 
-from ..config import ForgeConfig, ProjectPaths
+from ...config import ForgeConfig, ProjectPaths
 
 _API_BASE = "https://api.telegram.org"
 
@@ -134,8 +134,8 @@ class TelegramReceiver:
     def _send_status(self) -> None:
         from datetime import datetime
 
-        from ..checkpoint import Checkpoint
-        from ..cost_tracker import parse_cost_log
+        from ...checkpoint import Checkpoint
+        from ...cost_tracker import parse_cost_log
 
         cp = Checkpoint.load(self.paths.checkpoint_file)
         total_mins = parse_cost_log(self.paths.cost_log)
