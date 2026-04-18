@@ -599,11 +599,44 @@ def run_cycle(
                 cp.advance(Phase.EVALUATING_DONE, "evaluation complete")
                 cp.save(paths.checkpoint_file)
 
-            # Phase 5: 결과 판단
-            ok, reason = ev.validate_qa_report(paths)
-            if not ok:
-                notifier.notify("warning", f"qa-report.md 검증 실패: {reason}", project_name=paths.project_name)
+            # Phase 5: 결과 판단 — qa-report.md 유효성 검증
+            while True:
+                ok, reason = ev.validate_qa_report(paths)
+                if ok:
+                    break
+                # 무효한 qa-report (파일 없음 또는 "종합 판정:" 누락)
+                # 사용자가 /eval로 재실행하거나 /stop으로 중단할 수 있게 알림
+                notifier.notify(
+                    "warning",
+                    f"qa-report.md 검증 실패: {reason}\n\n"
+                    f"Evaluator가 판정을 완성하지 못했습니다.\n"
+                    f"/eval — Evaluator 재실행 (예: FORGE_EVALUATOR_MAX_TURNS 증가 후)\n"
+                    f"/stop — 여기서 중단",
+                    file_path=paths.qa_report if paths.qa_report.exists() else None,
+                    project_name=paths.project_name,
+                    buttons=[["/eval", "/stop"]],
+                )
+                decision = wait_for_approval_or_stop(paths, timeout=config.approval_timeout_seconds)
+                if decision in ("stop", "timeout"):
+                    exit_code = 4
+                    break
+                if decision == "eval":
+                    cp.advance(Phase.EVALUATING, "re-evaluating after validation fail")
+                    cp.save(paths.checkpoint_file)
+                    try:
+                        with sprint_tracer.span("evaluator-rerun") as info:
+                            result = ev.run_evaluate(config, paths)
+                            info["stdout"] = result.stdout or ""
+                            report_subprocess(result, f"evaluator-rerun sprint-{sprint_num}", console)
+                    except Exception as e:
+                        notifier.notify("error", f"Evaluator 재실행 중 예외: {e}", project_name=paths.project_name)
+                    cp.advance(Phase.EVALUATING_DONE, "re-evaluation complete")
+                    cp.save(paths.checkpoint_file)
+                    continue  # 다시 검증
+                # resume/skip 등 기타 — 이번 사이클 종료
                 exit_code = 4
+                break
+            if exit_code == 4:
                 break
 
             if ev.is_pass(paths):
