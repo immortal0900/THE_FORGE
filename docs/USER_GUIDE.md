@@ -5,7 +5,7 @@
 
 ---
 
-## ⚡ 5분 퀵스타트
+## 5분 퀵스타트
 
 이미 Claude Code CLI와 `uv`가 깔려 있고, Slack 봇 토큰 3종(또는 Telegram 봇 토큰)이 있다는 가정.
 
@@ -27,11 +27,11 @@ forge run "LangGraph 기반 대화 에이전트 뼈대 만들어줘"
 
 이후 진행 중 Slack에 버튼이 뜨면 `/resume` 클릭(또는 터미널에서 Enter). 그게 전부입니다. 나머지 절은 "막혔을 때" 또는 "더 정교하게 쓰고 싶을 때" 펼쳐 보세요.
 
-> 💰 **비용 감각**: THE FORGE는 Claude Code CLI를 서브프로세스로 호출합니다. 즉 **Claude Pro/Max 플랜의 쿼터**를 씁니다. API 토큰 과금이 아니라 구독 쿼터를 소모한다는 뜻. 한 스프린트는 보통 30분~2시간, 쿼터 기준으로는 "Generator가 제일 많이 먹는 한 덩어리"라고 생각하면 됩니다.
+> **비용 감각**: THE FORGE는 Claude Code CLI를 서브프로세스로 호출합니다. 즉 **Claude Pro/Max 플랜의 쿼터**를 씁니다. API 토큰 과금이 아니라 구독 쿼터를 소모한다는 뜻. 한 스프린트는 보통 30분~2시간, 쿼터 기준으로는 "Generator가 제일 많이 먹는 한 덩어리"라고 생각하면 됩니다.
 
 ---
 
-## 🧭 내 상황 찾기
+## 내 상황 찾기
 
 | 지금 상황 | 여기로 |
 |---|---|
@@ -39,16 +39,16 @@ forge run "LangGraph 기반 대화 에이전트 뼈대 만들어줘"
 | 폴더만 외장 SSD로 받았다 | [2.2 경로 B](#22-경로-b--폴더만-복사해왔을-때) |
 | 토큰을 아직 못 받았다 | [1.3 토큰 발급](#13-토큰-발급-절차) |
 | 어제 돌리다 멈췄는데 오늘 이어가고 싶다 | [12.1 이어서 하기](#121-이어서-하기--어제-멈췄다면) |
-| Slack에 이상한 메시지가 왔다 | [⚠️ 에러 빠른 찾기](#️-에러-빠른-찾기) |
+| Slack에 이상한 메시지가 왔다 | [에러 빠른 찾기](#에러-빠른-찾기) |
 | 결과가 이상해서 다시 평가만 돌리고 싶다 | [11.1 forge eval](#111-forge-eval) |
 | THE FORGE 본체를 업데이트했다 | [2.4 업그레이드](#24-업그레이드) |
-| Git에 뭘 커밋해야 할지 모르겠다 | [4.4 Git 관리 박스](#44--git에-뭘-커밋하고-뭘-무시하나) |
+| Git에 뭘 커밋해야 할지 모르겠다 | [4.4 Git 관리 박스](#44-git에-뭘-커밋하고-뭘-무시하나) |
 | 돈이 얼마나 드는지 궁금하다 | [10.3 비용 확인](#103-harness-cost-logtxt--비용토큰-누적) |
 | 완전 초기화하고 다시 시작하고 싶다 | [12.5 체크포인트 초기화](#125-체크포인트-완전-초기화) |
 
 ---
 
-## 📖 용어 3분 요약
+## 용어 3분 요약
 
 이 단어들만 알고 있어도 나머지 내용이 술술 읽힙니다.
 
@@ -67,7 +67,7 @@ forge run "LangGraph 기반 대화 에이전트 뼈대 만들어줘"
 
 ---
 
-## ⚠️ 에러 빠른 찾기
+## 에러 빠른 찾기
 
 본문을 읽기 전에 **에러 메시지로 바로 해결**하고 싶다면 이 표부터:
 
@@ -78,7 +78,7 @@ forge run "LangGraph 기반 대화 에이전트 뼈대 만들어줘"
 | `spec.md가 없고 요청도 없습니다` | 빈 프로젝트에서 인자 없이 `forge run` | 요청 문자열 또는 `--plan` 제공 |
 | `qa-report.md 검증 실패: ...` | Evaluator가 유효한 qa-report를 못 만듦 | `forge eval` 재실행 또는 수동 수정 |
 | `scaffold/ 디렉토리를 찾을 수 없습니다` | 설치 방식 손상 | [12.13](#1213-scaffold-디렉토리를-찾을-수-없습니다) |
-| `⚠️ 프로젝트명 ...는 이미 등록돼 있습니다` | registry 충돌 | [12.15](#1215-프로젝트명-충돌) |
+| `프로젝트명 ...는 이미 등록돼 있습니다` | registry 충돌 | [12.15](#1215-프로젝트명-충돌) |
 | `Generator 시간 초과 (N분)` | subprocess timeout | `FORGE_MAX_GENERATOR_MINUTES` 증가 |
 | `{backend} 크래시, /resume /skip /exit?` | 하위 subprocess 비-0 exit | [12.3](#123-상황-c--planner--evaluator-호출이-실패함) |
 | Telegram `403 Forbidden` | Bot/Chat 설정 오류 | [12.9](#129-telegram-403-forbidden) |
@@ -134,7 +134,7 @@ forge run "LangGraph 기반 대화 에이전트 뼈대 만들어줘"
 
 > 획득물: `FORGE_TELEGRAM_BOT_TOKEN`, `FORGE_TELEGRAM_CHAT_ID`.
 >
-> ⚠️ Telegram은 **봇 하나당 동시에 receiver 1개**만 뜰 수 있습니다. 여러 프로젝트를 동시에 돌리려면 봇을 여러 개 만들거나 Slack을 쓰세요.
+> **주의**: Telegram은 **봇 하나당 동시에 receiver 1개**만 뜰 수 있습니다. 여러 프로젝트를 동시에 돌리려면 봇을 여러 개 만들거나 Slack을 쓰세요.
 
 #### Langfuse (선택)
 
@@ -332,9 +332,9 @@ forge init --root /path/to/my-project
 
 **이름 중복 시**: `~/.forge/registry.json`에 같은 이름이 다른 경로로 이미 있으면 경고가 뜨고 새 이름을 묻습니다. 엔터만 치면 `{원래이름}_{상위폴더}` 형태로 자동 변경됩니다.
 
-### 4.3 📦 안심 박스 — `forge init`이 내 프로젝트에 하는 일 / 안 하는 일
+### 4.3 안심 박스 — `forge init`이 내 프로젝트에 하는 일 / 안 하는 일
 
-> **✅ 건드리는 것 (덮어쓰거나 추가)**
+> **건드리는 것 (덮어쓰거나 추가)**
 >
 > - `CLAUDE.md` — 없으면 생성. 있으면 `--force` 쓸 때만 `artifacts/.backup/`으로 옮기고 덮어씀.
 > - `.claude/agents/*.md` (planner/generator/evaluator/journal) — 복사.
@@ -343,13 +343,13 @@ forge init --root /path/to/my-project
 > - `templates/*.md` — 11종 복사.
 > - `artifacts/`, `artifacts/specs/`, `artifacts/decisions/`, `docs/` — 없으면 생성.
 >
-> **✅ 없을 때만 추가 (있으면 안 건드림)**
+> **없을 때만 추가 (있으면 안 건드림)**
 >
 > - `.env` — `FORGE_PROJECT_NAME="..."` 한 줄만. 이미 있으면 그대로 둠.
 > - `pyproject.toml`의 `[tool.forge]` 섹션 — 없을 때만 append. `pyproject.toml`이 아예 없으면 만들지도 않음.
 > - `.gitignore` — 12개 항목을 미존재 시에만 append.
 >
-> **❌ 절대 건드리지 않는 것**
+> **절대 건드리지 않는 것**
 >
 > - 기존 소스 코드 (`src/`, `app/` 등 전부 포함)
 > - 기존 테스트
@@ -357,13 +357,13 @@ forge init --root /path/to/my-project
 > - 기존 `package.json` / `Cargo.toml` / `go.mod` 등 다른 언어의 매니페스트
 > - Git 히스토리
 >
-> **🔧 `--force` 플래그를 쓰면?**
+> **`--force` 플래그를 쓰면?**
 >
 > - `CLAUDE.md`, `.claude/settings.json`, `.env`가 `artifacts/.backup/`에 백업된 뒤 덮어쓰기.
 > - `templates/`, `.claude/agents/`가 scaffold 최신 버전으로 교체.
 > - **여전히 소스 코드는 건드리지 않습니다**.
 
-### 4.4 🔒 Git에 뭘 커밋하고 뭘 무시하나
+### 4.4 Git에 뭘 커밋하고 뭘 무시하나
 
 `forge init`이 `.gitignore`에 자동으로 추가하는 항목은 다음과 같습니다 (이미 `.gitignore`가 있으면 항목이 없을 때만 append).
 
@@ -544,16 +544,16 @@ forge run "요청" -r /path/to/other-project
 한 스프린트는 **소규모 팀의 하루 업무**를 모델로 합니다.
 
 ```
-📋 PLANNING        기획 — "이걸 왜 만드나? 어떻게 쪼개나?"
-   ↓               (spec.md, specs/*.md, plan-review.md 생성)
-📝 CONTRACT        이번 스프린트 계약서 — "이번엔 어디까지 한다"
-   ↓               (sprint-contract.md 생성, 다음 스프린트 존재 여부 결정)
-🔨 GENERATING      구현 — Generator가 실제 코드를 짭니다
-   ↓               (progress-log.md, decisions/*.md, 소스 커밋)
-🔍 EVALUATING      검증 — Evaluator가 체크박스·테스트·E2E를 확인
-   ↓               (qa-report.md 생성)
-🎯 판정             PASS → sprint-N-done.md로 아카이브 → 다음 스프린트
-                   FAIL → CONTRACT_DONE으로 되돌려 Generator 재진입
+PLANNING        기획 — "이걸 왜 만드나? 어떻게 쪼개나?"
+   ↓            (spec.md, specs/*.md, plan-review.md 생성)
+CONTRACT        이번 스프린트 계약서 — "이번엔 어디까지 한다"
+   ↓            (sprint-contract.md 생성, 다음 스프린트 존재 여부 결정)
+GENERATING      구현 — Generator가 실제 코드를 짭니다
+   ↓            (progress-log.md, decisions/*.md, 소스 커밋)
+EVALUATING      검증 — Evaluator가 체크박스·테스트·E2E를 확인
+   ↓            (qa-report.md 생성)
+판정            PASS → sprint-N-done.md로 아카이브 → 다음 스프린트
+                FAIL → CONTRACT_DONE으로 되돌려 Generator 재진입
 ```
 
 **생성물 요약**:
@@ -643,7 +643,7 @@ Slack에서는 알림 메시지에 버튼이 붙어 타이핑 없이 클릭만�
 |---|---|---|
 | `/forge-status` | 없음 또는 `[project_name]` | 실행 중 forge 프로세스 상태 조회 |
 
-**`/revise` 버튼 (Slack 전용)**: Planner 알림의 `[✏️ revise]` 클릭 → 입력 모달 → 수정 지시 제출 → Planner가 재실행되어 `spec.md`를 수정. 만족할 때까지 반복 가능.
+**`/revise` 버튼 (Slack 전용)**: Planner 알림의 `[revise]` 클릭 → 입력 모달 → 수정 지시 제출 → Planner가 재실행되어 `spec.md`를 수정. 만족할 때까지 반복 가능.
 
 ### 7.3 시그널 파일 직접 생성 — 비상용
 
@@ -686,7 +686,7 @@ caption: artifacts/spec.md
 
 - 기존 파일은 `artifacts/.backup/{원파일명}.bak`으로 이동.
 - `artifacts/` 밖으로 벗어나는 상대경로는 거부됩니다 (traversal 방어).
-- 성공 시 `✅ artifacts/spec.md 저장 완료` 회신.
+- 성공 시 `artifacts/spec.md 저장 완료` 회신.
 
 모바일에서 기획서를 수정한 뒤 `/resume`으로 다음 단계를 트리거할 수 있습니다.
 
@@ -795,8 +795,8 @@ forge status --root /path/to/other-project
 │ plan-review.md    │ OK                                        │
 │ sprint-contract.md│ OK                                        │
 │ qa-report.md      │ -                                         │
-│ Sprint 1          │ ✅ PASS (archived)                        │
-│ Sprint 2          │ ✅ PASS (archived)                        │
+│ Sprint 1          │ PASS (archived)                           │
+│ Sprint 2          │ PASS (archived)                           │
 └───────────────────┴───────────────────────────────────────────┘
 ```
 
