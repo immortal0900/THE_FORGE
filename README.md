@@ -283,4 +283,3 @@ forge run
 
 ---
 
-MIT License. Claude Code는 Anthropic의 제품이며 THE FORGE는 그 위에서 동작하는 독립 오케스트레이터다.
