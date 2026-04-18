@@ -12,6 +12,7 @@
 | deepeval-setup.md | LLM 평가 | deepeval, metric, g-eval, test case | artifacts/specs/deepeval-metrics.md |
 | langfuse-setup.md | LLM 추적/관측 | langfuse, trace, span, observability | artifacts/specs/langfuse-tracing.md |
 | claude-cli-subprocess.md | Claude CLI 자동화/하네스 | claude, subprocess, headless, cli, agent, permission | artifacts/specs/claude-cli-integration.md |
+| gdrive-watchdog-sync.md | Google Drive ↔ 로컬 양방향 sync | google drive, watchdog, bidirectional, echo loop, page token, multi-root, --config | artifacts/specs/gdrive-sync.md |
 
 ## 공통 템플릿
 
