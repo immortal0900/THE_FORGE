@@ -346,10 +346,18 @@ def _notify_project_complete(
         f"  - 입력: {totals['tokens_input']:,}\n"
         f"  - 출력: {totals['tokens_output']:,}\n"
         f"  - 캐시 히트: {totals['tokens_cache']:,}\n\n"
+        f"마지막 스프린트(Sprint {total_sprints}) qa-report.md를 첨부합니다.\n"
+        f"전체 히스토리는 artifacts/sprint-{{N}}-done.md에 아카이브됨.\n\n"
         f"spec.md의 모든 스프린트가 구현 완료되었습니다.\n"
         f"추가 작업이 필요하면 spec.md에 새 스프린트 추가 후 forge run."
     )
-    notifier.notify("project_complete", msg, project_name=paths.project_name)
+    # 마지막 스프린트의 qa-report.md를 첨부 (아직 _archive_sprint로 sprint-N-done.md에 복사되긴 했지만
+    # 원본 artifacts/qa-report.md 파일도 그대로 남아있음)
+    notifier.notify(
+        "project_complete", msg,
+        file_path=paths.qa_report if paths.qa_report.exists() else None,
+        project_name=paths.project_name,
+    )
 
 
 # ── 메인 사이클 ─────────────────────────────────────────────────────────────
