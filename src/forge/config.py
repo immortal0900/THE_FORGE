@@ -63,7 +63,7 @@ class ForgeConfig(BaseSettings):
 
     # ── v2.3: 자동 루프 안전장치 ──
     max_total_minutes: int = 1440
-    max_consecutive_fails: int = 3
+    max_consecutive_fails: int = 0   # 0 = 무제한 (사용자가 /stop으로 직접 중단). >0 시 그 횟수에서 자동 중단.
     max_total_sprints: int = 20
 
     # ── 승인 대기 타임아웃 (초). 기본 24시간. ──

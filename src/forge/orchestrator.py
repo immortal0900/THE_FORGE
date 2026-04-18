@@ -297,6 +297,11 @@ def _notify_fail_with_options(
     total_mins = parse_cost_log(paths.cost_log)
     score_lines = "\n".join(f"• {k}: {v}/10" for k, v in scores.items())
     dur = totals["duration_seconds"] / 60
+    consecutive_line = (
+        f"⚠️ 연속 FAIL: {consecutive}/{config.max_consecutive_fails}"
+        if config.max_consecutive_fails > 0
+        else f"⚠️ 연속 FAIL: {consecutive}회 (자동 중단 임계 없음 — 수동 /stop 필요)"
+    )
     msg = (
         f"Sprint {sprint_num} FAILED\n\n"
         f"점수:\n{score_lines}\n\n"
@@ -304,7 +309,7 @@ def _notify_fail_with_options(
         f"📊 비용\n"
         f"• 이번 스프린트: {dur:.0f}분 | in {totals['tokens_input']:,} / out {totals['tokens_output']:,}\n"
         f"• 누적: {total_mins:.0f}분\n\n"
-        f"⚠️ 연속 FAIL: {consecutive}/{config.max_consecutive_fails}\n\n"
+        f"{consecutive_line}\n\n"
         f"─────────────────\n\n"
         f"/resume — Generator 재진입\n"
         f"/eval — Evaluator 재실행\n"
@@ -499,7 +504,7 @@ def run_cycle(
                 notifier.notify("auto_stop", f"최대 스프린트 수 {effective_max} 도달 — 자동 중단", project_name=paths.project_name)
                 break
 
-            if consecutive_fails >= config.max_consecutive_fails:
+            if config.max_consecutive_fails > 0 and consecutive_fails >= config.max_consecutive_fails:
                 notifier.notify("auto_stop", f"{config.max_consecutive_fails}회 연속 FAIL — 자동 중단", file_path=paths.qa_report, project_name=paths.project_name)
                 break
 
