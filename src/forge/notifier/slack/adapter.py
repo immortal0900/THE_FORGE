@@ -97,15 +97,11 @@ class SlackNotifier(NotifierAdapter):
         if not self.enabled:
             return
 
-        # import을 조건부로 하여 slack_sdk 미설치 시에도 import 에러 없이 TelegramNotifier 사용 가능
+        # WebClient만 미리 초기화 (notify 전송용, 경량).
+        # SocketModeClient는 start() 시 생성 — 일회성 명령(forge notify)이 백그라운드 스레드를 띄우지 않도록.
         from slack_sdk import WebClient
-        from slack_sdk.socket_mode import SocketModeClient
 
         self._web = WebClient(token=config.slack_bot_token)
-        self._socket = SocketModeClient(
-            app_token=config.slack_app_token,
-            web_client=self._web,
-        )
 
     @property
     def enabled(self) -> bool:
@@ -203,10 +199,20 @@ class SlackNotifier(NotifierAdapter):
     # ── 수신 ─────────────────────────────────────────────────────────────
 
     def start(self) -> None:
-        if not self.enabled or self._socket is None:
+        if not self.enabled or self._web is None:
             return
         if self._thread is not None and self._thread.is_alive():
             return
+
+        # SocketModeClient를 lazy 초기화 (start에서만 WebSocket 연결 대비 스레드 생성)
+        if self._socket is None:
+            from slack_sdk.socket_mode import SocketModeClient
+
+            self._socket = SocketModeClient(
+                app_token=self._config.slack_app_token,
+                web_client=self._web,
+            )
+
         self._stop_event.clear()
         self._socket.socket_mode_request_listeners.append(self._handle)
         self._thread = threading.Thread(target=self._run, daemon=True)
@@ -235,7 +241,7 @@ class SlackNotifier(NotifierAdapter):
             self._thread.join(timeout=5)
 
     def _handle(self, client, req) -> None:
-        """Socket Mode 요청 처리. interactive 이벤트 중 내 프로젝트 것만 signal로 변환."""
+        """Socket Mode 요청 처리. interactive / slash_commands 중 내 프로젝트 것만 처리."""
         from slack_sdk.socket_mode.response import SocketModeResponse
 
         # 모든 요청은 일단 ACK (Slack이 재전송하지 않도록)
@@ -246,11 +252,14 @@ class SlackNotifier(NotifierAdapter):
         except Exception:
             pass
 
-        if req.type != "interactive":
-            return
+        if req.type == "interactive":
+            self._handle_interactive(req.payload)
+        elif req.type == "slash_commands":
+            self._handle_slash_command(req.payload)
 
+    def _handle_interactive(self, payload: dict) -> None:
         try:
-            actions = req.payload.get("actions", [])
+            actions = payload.get("actions", [])
             if not actions:
                 return
             value = actions[0].get("value", "")
@@ -261,9 +270,29 @@ class SlackNotifier(NotifierAdapter):
                 return  # ★ 다른 프로젝트의 이벤트 — 필터 통과시키지 않음
 
             action = action_raw.strip().lower()
-            self._apply_signal(action, req.payload)
+            self._apply_signal(action, payload)
         except Exception as e:
             logger.warning("Slack interactive 처리 실패: %s", e)
+
+    def _handle_slash_command(self, payload: dict) -> None:
+        """`/forge-status [project_name]` 처리.
+
+        Slack Socket Mode는 여러 연결 중 하나에만 이벤트를 전달하므로 여기서는 필터만 하고,
+        다른 프로젝트용 커맨드라면 조용히 무시한다. 같은 앱을 쓰는 모든 forge 프로세스가
+        같은 이벤트를 받을 수도 있는데 그 경우 각자 필터를 거쳐 자기 것만 응답한다.
+        """
+        try:
+            command = (payload.get("command") or "").strip().lower()
+            if command != "/forge-status":
+                return
+            arg = (payload.get("text") or "").strip().lower()
+            # 인자 없으면 모든 프로세스가 각자 응답, 있으면 일치하는 것만 응답
+            if arg and arg != self._project_name:
+                return
+            channel = payload.get("channel_id") or self._channel
+            self._post_status(channel)
+        except Exception as e:
+            logger.warning("Slack slash_command 처리 실패: %s", e)
 
     def _apply_signal(self, action: str, payload: dict) -> None:
         """action 명령어를 signal 파일로 변환. `/status` 같은 조회성 액션은 직접 응답."""
@@ -296,7 +325,7 @@ class SlackNotifier(NotifierAdapter):
         # 유저에게 피드백 한 줄 (동일 채널에 스레드 답장)
         self._reply(payload, f"✅ `{action}` 처리됨 — `{self._project_name}`")
 
-    def _send_status_reply(self, payload: dict) -> None:
+    def _build_status_text(self) -> str:
         from datetime import datetime
 
         from ...checkpoint import Checkpoint
@@ -313,7 +342,7 @@ class SlackNotifier(NotifierAdapter):
         except (ValueError, TypeError):
             pass
 
-        text = (
+        return (
             f"📊 [{self._project_name}]\n"
             f"Phase: {cp.phase.name}\n"
             f"Sprint: #{self._paths.current_sprint()}\n"
@@ -322,7 +351,23 @@ class SlackNotifier(NotifierAdapter):
             f"Detail: {cp.detail}\n"
             f"Updated: {cp.timestamp}"
         )
-        self._reply(payload, text)
+
+    def _send_status_reply(self, payload: dict) -> None:
+        self._reply(payload, self._build_status_text())
+
+    def _post_status(self, channel: str) -> None:
+        """지정 채널에 상태를 새 메시지로 게시 (slash command 응답용)."""
+        if self._web is None:
+            return
+        try:
+            self._web.chat_postMessage(
+                channel=channel,
+                username=self._display_name,
+                icon_emoji=self._emoji,
+                text=self._build_status_text()[:3000],
+            )
+        except Exception as e:
+            logger.warning("Slack status post 실패: %s", e)
 
     def _send_help_reply(self, payload: dict) -> None:
         self._reply(
