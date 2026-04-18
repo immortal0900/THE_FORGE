@@ -48,6 +48,7 @@ BUTTON_EMOJI = {
     "status": "📊", "상태": "📊",
     "continue": "▶️",
     "help": "❓", "도움": "❓",
+    "revise": "✏️", "수정": "✏️",
 }
 
 # 버튼 액션 → Slack 스타일 ("primary" | "danger" | default)
@@ -259,6 +260,12 @@ class SlackNotifier(NotifierAdapter):
 
     def _handle_interactive(self, payload: dict) -> None:
         try:
+            # view_submission (modal 제출) — revise 흐름 완료 지점
+            if payload.get("type") == "view_submission":
+                self._handle_view_submission(payload)
+                return
+
+            # block_actions (일반 버튼 클릭)
             actions = payload.get("actions", [])
             if not actions:
                 return
@@ -270,9 +277,91 @@ class SlackNotifier(NotifierAdapter):
                 return  # ★ 다른 프로젝트의 이벤트 — 필터 통과시키지 않음
 
             action = action_raw.strip().lower()
+            # revise 버튼은 signal 작성이 아니라 modal 열기
+            if action in ("revise", "수정"):
+                trigger_id = payload.get("trigger_id")
+                if trigger_id:
+                    self._open_revise_modal(trigger_id)
+                return
+
             self._apply_signal(action, payload)
         except Exception as e:
             logger.warning("Slack interactive 처리 실패: %s", e)
+
+    def _open_revise_modal(self, trigger_id: str) -> None:
+        """revise 버튼 클릭 시 사용자에게 수정 지시 입력받는 modal을 연다."""
+        if self._web is None:
+            return
+        view = {
+            "type": "modal",
+            "callback_id": "forge_revise_submit",
+            "private_metadata": self._project_name,  # 제출 시 이 값으로 프로젝트 매칭
+            "title": {"type": "plain_text", "text": f"✏️ {self._display_name}"[:24]},
+            "submit": {"type": "plain_text", "text": "제출"},
+            "close": {"type": "plain_text", "text": "취소"},
+            "blocks": [
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f"*{self._project_name}* 의 spec.md를 어떻게 수정할까요?",
+                    },
+                },
+                {
+                    "type": "input",
+                    "block_id": "revise_input_block",
+                    "label": {"type": "plain_text", "text": "수정 지시"},
+                    "element": {
+                        "type": "plain_text_input",
+                        "action_id": "revise_text",
+                        "multiline": True,
+                        "placeholder": {
+                            "type": "plain_text",
+                            "text": "예: 데이터베이스를 PostgreSQL에서 SQLite로 변경하고 비동기 처리 제거",
+                        },
+                        "max_length": 2000,
+                    },
+                },
+            ],
+        }
+        try:
+            self._web.views_open(trigger_id=trigger_id, view=view)
+        except Exception as e:
+            logger.warning("Slack views_open 실패: %s", e)
+
+    def _handle_view_submission(self, payload: dict) -> None:
+        """revise modal 제출 처리. private_metadata로 프로젝트 필터."""
+        view = payload.get("view", {})
+        if view.get("callback_id") != "forge_revise_submit":
+            return
+        project = view.get("private_metadata", "")
+        if project != self._project_name:
+            return  # ★ 다른 프로젝트 modal — 무시
+
+        values = view.get("state", {}).get("values", {})
+        block = values.get("revise_input_block", {})
+        text = (block.get("revise_text", {}) or {}).get("value", "") or ""
+        text = text.strip()
+        if not text:
+            return
+
+        self._paths.ensure_artifacts()
+        try:
+            self._paths.revise_signal.write_text(text, encoding="utf-8")
+        except OSError as e:
+            logger.warning("revise_signal 작성 실패: %s", e)
+            return
+
+        # 채널에 피드백 한 줄
+        try:
+            self._web.chat_postMessage(
+                channel=self._channel,
+                username=self._display_name,
+                icon_emoji=self._emoji,
+                text=f"✏️ `{self._project_name}` 수정 지시 접수됨 — Planner 재실행 중…\n> {text[:300]}",
+            )
+        except Exception as e:
+            logger.warning("Slack revise 피드백 실패: %s", e)
 
     def _handle_slash_command(self, payload: dict) -> None:
         """`/forge-status [project_name]` 처리.

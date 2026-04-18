@@ -52,12 +52,16 @@ def _stdin_ready(timeout: float = 2.0) -> bool:
 
 
 def wait_for_approval(paths: ProjectPaths, timeout: float = 600.0) -> str:
-    """Telegram 시그널 또는 stdin 입력 대기. 반환: resume/skip/exit/continue/timeout."""
+    """알림 백엔드 신호 또는 stdin 입력 대기. 반환: resume/skip/exit/continue/revise/timeout.
+
+    revise인 경우 .revise-signal 파일에 수정 지시문이 저장됨 (읽기는 호출부에서).
+    """
     for sig in (
         paths.approval_signal,
         paths.skip_signal,
         paths.exit_signal,
         paths.continue_signal,
+        paths.revise_signal,
     ):
         sig.unlink(missing_ok=True)
     deadline = time.time() + timeout
@@ -66,6 +70,8 @@ def wait_for_approval(paths: ProjectPaths, timeout: float = 600.0) -> str:
             return "exit"
         if paths.skip_signal.exists():
             return "skip"
+        if paths.revise_signal.exists():
+            return "revise"
         if paths.approval_signal.exists():
             content = paths.approval_signal.read_text(encoding="utf-8").strip()
             return content or "resume"
@@ -419,9 +425,9 @@ def run_cycle(
 
             status = pl.plan_review_status(paths)
             plan_buttons = (
-                [["/resume", "/exit"]]
+                [["/resume", "/revise"], ["/exit"]]
                 if status == "READY"
-                else [["/skip", "/resume"], ["/exit"]]
+                else [["/skip", "/resume"], ["/revise", "/exit"]]
             )
             notifier.notify(
                 "planner_done" if status == "READY" else "plan_revision",
@@ -431,11 +437,46 @@ def run_cycle(
                 buttons=plan_buttons,
             )
 
-            signal = wait_for_approval(paths, timeout=config.approval_timeout_seconds)
-            if signal == "exit":
-                cp.advance(Phase.PLANNING, "halted by user after planning")
-                cp.save(paths.checkpoint_file)
-                return 0
+            # Planner 승인/수정 대기 — revise 요청이 오면 수정 모드로 재진입
+            while True:
+                signal = wait_for_approval(paths, timeout=config.approval_timeout_seconds)
+                if signal == "exit":
+                    cp.advance(Phase.PLANNING, "halted by user after planning")
+                    cp.save(paths.checkpoint_file)
+                    return 0
+                if signal == "revise":
+                    # 사용자 수정 지시를 읽고 Planner Mode D 호출
+                    try:
+                        revise_text = paths.revise_signal.read_text(encoding="utf-8").strip()
+                    except OSError:
+                        revise_text = ""
+                    paths.revise_signal.unlink(missing_ok=True)
+                    if not revise_text:
+                        console.print("[yellow]revise 신호는 있으나 지시문이 비어있음 — 무시[/yellow]")
+                        continue
+                    console.print(f"[cyan]Planner 수정 모드 진입: {revise_text[:120]}[/cyan]")
+                    with tracer.span("planner-revise") as info:
+                        result = pl.run_revise(revise_text, config, paths)
+                        info["stdout"] = result.stdout or ""
+                        report_subprocess(result, "planner(revise)", console)
+                    # 수정 결과 다시 알림
+                    status = pl.plan_review_status(paths)
+                    plan_buttons = (
+                        [["/resume", "/revise"], ["/exit"]]
+                        if status == "READY"
+                        else [["/skip", "/resume"], ["/revise", "/exit"]]
+                    )
+                    notifier.notify(
+                        "planner_done" if status == "READY" else "plan_revision",
+                        f"(수정 반영됨) plan-review.md 상태: {status}",
+                        file_path=paths.plan_review if paths.plan_review.exists() else paths.spec,
+                        project_name=paths.project_name,
+                        buttons=plan_buttons,
+                    )
+                    continue  # 다시 대기 — 사용자가 추가 revise 또는 resume/exit 선택
+                # resume / skip / continue / timeout — 루프 탈출
+                break
+
             if status == "NEEDS_REVISION" and signal != "skip":
                 return 0
 

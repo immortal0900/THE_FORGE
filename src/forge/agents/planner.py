@@ -85,6 +85,37 @@ def run_contract(
     )
 
 
+def run_revise(
+    revise_text: str,
+    config: ForgeConfig,
+    paths: ProjectPaths,
+) -> CompletedProcess:
+    """모드 D — 사용자 지시에 따라 기존 spec.md를 수정.
+
+    Planner는 통상 spec.md를 직접 수정할 수 없지만, 이 모드에서만 예외적으로 Edit 허용.
+    """
+    prompt = (
+        f"**반드시 Mode D(수정 모드)로 동작하라.**\n\n"
+        f"사용자의 수정 요구: {revise_text}\n\n"
+        f"작업:\n"
+        f"1. artifacts/spec.md를 Read한다.\n"
+        f"2. artifacts/plan-review.md가 있다면 Read한다.\n"
+        f"3. 사용자 요구를 반영해 artifacts/spec.md를 **Edit 도구로 직접 수정**한다 "
+        f"(수정 모드에서만 허용되는 예외).\n"
+        f"4. 관련 artifacts/specs/*.md도 일관성을 위해 보강한다.\n"
+        f"5. artifacts/plan-review.md를 갱신하되, 맨 위에 다음 섹션을 추가하라:\n"
+        f"   ## 수정 이력 — {{현재 타임스탬프}}\n"
+        f"   - 사용자 지시: {revise_text}\n"
+        f"   - 변경 요약: (spec.md의 어느 섹션이 어떻게 바뀌었는지)\n"
+        f"6. 종합 판정 라인 (READY / NEEDS_REVISION)을 다시 기록하라.\n\n"
+        f"원칙: 기존 spec.md의 구조/용어는 최대한 유지. 사용자가 지정한 부분만 국소 교체. "
+        f"artifacts/ 바깥 파일은 여전히 건드리지 마라."
+    )
+    return _run_claude_agent(
+        prompt, "planner", config.planner_review_max_turns, paths.project_root
+    )
+
+
 def plan_review_status(paths: ProjectPaths) -> str:
     """plan-review.md에서 'READY' / 'NEEDS_REVISION' 추출."""
     if not paths.plan_review.exists():

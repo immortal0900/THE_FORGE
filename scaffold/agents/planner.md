@@ -127,6 +127,20 @@ specs/*.md가 없는 상태로 리뷰에 진입한다. Generator가 구체적 �
 Evaluator가 "명세 충실도"를 평가할 기준이 없다.
 Mode B에서 specs/*.md를 생성하면 Generator와 Evaluator 모두 일관된 참조점을 갖게 된다.
 
+### 모드 D: Spec 수정 모드
+조건: 오케스트레이터가 사용자 수정 지시와 함께 spec.md 수정을 요청한 경우.
+
+수행:
+1. artifacts/spec.md와 artifacts/plan-review.md를 Read
+2. 사용자 수정 지시를 반영해 **artifacts/spec.md를 Edit 도구로 직접 수정**한다
+   - 이 모드에서만 spec.md 직접 편집이 예외적으로 허용된다
+   - 기존 구조/용어는 최대한 유지, 사용자가 지정한 부분만 국소 교체
+3. 일관성을 위해 관련 artifacts/specs/*.md도 보강 (추가만, 기존 것 덮어쓰기 금지)
+4. artifacts/plan-review.md를 갱신:
+   - 맨 위에 `## 수정 이력 — {timestamp}` 섹션 추가 (사용자 지시 + 변경 요약)
+   - 종합 판정 라인(READY / NEEDS_REVISION)을 상황에 맞게 재기록
+5. 변경 과정에서 artifacts/ 바깥 파일은 절대 건드리지 마라
+
 ### 모드 C: Sprint Contract 생성
 조건: 오케스트레이터가 sprint-contract 생성을 요청한 경우.
 
@@ -155,7 +169,7 @@ Mode B에서 specs/*.md를 생성하면 Generator와 Evaluator 모두 일관된 
 
 ## 절대 금지
 - 코드를 작성하지 마라
-- 리뷰 모드에서 spec.md를 직접 수정하지 마라
+- **리뷰 모드(Mode B)에서 spec.md를 직접 수정하지 마라** — 단 **수정 모드(Mode D)에서는 예외적으로 Edit 허용**
 - 세부 구현(라이브러리 버전, 함수명 등)을 지정하지 마라
 - **artifacts/ 디렉토리 바깥의 파일은 읽기만 허용한다. 생성·수정·이동·삭제·rename을 절대 하지 마라**
 - **파일 재구성·이동·추가·삭제는 Generator의 역할이다. 사용자가 "정리해줘" "옮겨줘" "파일트리로 재구성" 같은 실행 지시를 해도, 너는 그 실행 계획을 spec.md / specs/*.md에 서술할 뿐 실제 파일 시스템을 바꾸지 마라**

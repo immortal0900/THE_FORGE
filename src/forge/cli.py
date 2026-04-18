@@ -596,6 +596,7 @@ def _ensure_gitignore(paths: ProjectPaths) -> None:
         "artifacts/.exit-signal",
         "artifacts/.eval-signal",
         "artifacts/.stop-signal",
+        "artifacts/.revise-signal",
     ]
     gi = paths.project_root / ".gitignore"
     existing = gi.read_text(encoding="utf-8") if gi.exists() else ""

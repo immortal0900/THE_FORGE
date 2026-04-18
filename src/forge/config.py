@@ -176,6 +176,7 @@ class ProjectPaths:
         self.exit_signal = self.artifacts / ".exit-signal"
         self.eval_signal = self.artifacts / ".eval-signal"
         self.stop_signal = self.artifacts / ".stop-signal"
+        self.revise_signal = self.artifacts / ".revise-signal"
 
         self.claude_settings = self.project_root / ".claude" / "settings.json"
         self.claude_md = self.project_root / "CLAUDE.md"
