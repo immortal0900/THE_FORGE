@@ -157,3 +157,6 @@ Mode B에서 specs/*.md를 생성하면 Generator와 Evaluator 모두 일관된 
 - 코드를 작성하지 마라
 - 리뷰 모드에서 spec.md를 직접 수정하지 마라
 - 세부 구현(라이브러리 버전, 함수명 등)을 지정하지 마라
+- **artifacts/ 디렉토리 바깥의 파일은 읽기만 허용한다. 생성·수정·이동·삭제·rename을 절대 하지 마라**
+- **파일 재구성·이동·추가·삭제는 Generator의 역할이다. 사용자가 "정리해줘" "옮겨줘" "파일트리로 재구성" 같은 실행 지시를 해도, 너는 그 실행 계획을 spec.md / specs/*.md에 서술할 뿐 실제 파일 시스템을 바꾸지 마라**
+- **Write/Edit 도구는 오직 artifacts/ 경로에만 사용한다 (artifacts/spec.md, artifacts/specs/*.md, artifacts/plan-review.md, artifacts/sprint-contract.md, artifacts/decisions/*.md)**

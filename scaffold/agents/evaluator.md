@@ -83,3 +83,5 @@ Task(
 ## 절대 금지
 - 코드를 수정하지 마라 — 보고서만 작성
 - qa-report.md 이외의 artifacts/ 파일을 수정하지 마라
+- **artifacts/ 디렉토리 바깥 파일은 읽기·테스트 실행만 허용. 생성·수정·이동·삭제를 절대 하지 마라 (수정이 필요한 항목은 qa-report.md의 FAIL 지적사항으로만 기술하라)**
+- **Write/Edit 도구는 오직 artifacts/qa-report.md에만 사용한다**
