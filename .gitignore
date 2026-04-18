@@ -9,31 +9,35 @@ build/
 # uv
 .uv-cache/
 
-# IDE
+# 도구 캐시
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# IDE / OS
 .vscode/
 .idea/
+.DS_Store
+Thumbs.db
 
 # 환경/비밀
 .env
 forge.toml
 
-# forge runtime
-artifacts/spec.md
-artifacts/plan-review.md
-artifacts/sprint-contract.md
-artifacts/progress-log.md
-artifacts/qa-report.md
-artifacts/harness-cost-log.txt
-artifacts/.harness-checkpoint
-artifacts/.backup/
-artifacts/specs/
-artifacts/decisions/
-artifacts/.approval-signal
-artifacts/.skip-signal
-artifacts/.continue-signal
-artifacts/.exit-signal
+# THE_FORGE 자체 개발: 루트 templates/는 자기참조용 사본 (원본은 scaffold/templates/)
+templates/
+
+# forge 런타임 (통째로 잠그고 필요 시 화이트리스트)
+artifacts/*
+!artifacts/.gitkeep
+
+# forge journal 자동 생성물
+docs/journal.md
+
+# 로컬 기획서·메모 (공유 안 함)
 prancy-spinning-peacock.md
-# 기획서 (로컬)
 harness-implementation-spec-v1_4.md
 THE_FORGE-implementation-spec-v2_1.md
 the-forge-spec-v2.0.md
@@ -42,10 +46,9 @@ THE_FORGE-implementation-spec-v2_3 (2).md
 IMPLEMENTATION_EVALUATION.md
 THE FORGE.md
 THE_FORGE_명령어모음.md
-# docs
 README2.md
-readme3.md   
+readme3.md
 
-# Claude Code 로컬 권한
+# Claude Code 로컬
 .claude/settings.local.json
 .claude/settings.json
