@@ -477,7 +477,8 @@ def run_cycle(
                 # resume / skip / continue / timeout — 루프 탈출
                 break
 
-            if status == "NEEDS_REVISION" and signal != "skip":
+            # resume/skip: 진행. timeout/continue: 진행하지 않고 이번 사이클 종료.
+            if signal not in ("resume", "skip"):
                 return 0
 
             cp.advance(Phase.PLANNING_DONE, "planning approved")
