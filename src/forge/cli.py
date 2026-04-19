@@ -92,6 +92,7 @@ def eval_cmd(
     sprint_num = paths.current_sprint()
     tracer = SprintTracer(config, sprint_num, paths.project_name, paths.cost_log)
     with tracer.span("evaluator", mode="eval-only") as info:
+        info["input"] = f"[evaluator/manual/sprint-{sprint_num}] forge eval invocation"
         result = ev.run_evaluate(config, paths)
         info["stdout"] = result.stdout or ""
         report_subprocess(result, "evaluator(manual)", console)
@@ -141,6 +142,8 @@ def journal(
     sprint_num = paths.current_sprint()
     tracer = SprintTracer(config, sprint_num, paths.project_name, paths.cost_log)
     with tracer.span("journal", mode="claude-p") as info:
+        scope = f"sprints={sprint_list}" if sprint_list else (f"since={since}" if since else "full")
+        info["input"] = f"[journal] scope: {scope}"
         result = jr.run_journal(config, paths, sprints=sprint_list, since=since)
         info["stdout"] = result.stdout or ""
         report_subprocess(result, "journal", console)

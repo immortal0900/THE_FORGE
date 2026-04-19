@@ -418,10 +418,12 @@ def run_cycle(
                     if not request:
                         notifier.notify("error", "spec.md가 없고 요청도 없습니다.", project_name=paths.project_name)
                         return 2
+                    info["input"] = f"[planner/generate] user_request:\n{request}"
                     result = pl.run_generate(request, config, paths)
                     info["stdout"] = result.stdout or ""
                     report_subprocess(result, "planner(generate)", console)
                 else:
+                    info["input"] = "[planner/review] reviewing existing spec.md"
                     result = pl.run_review(config, paths)
                     info["stdout"] = result.stdout or ""
                     report_subprocess(result, "planner(review)", console)
@@ -469,6 +471,7 @@ def run_cycle(
                         continue
                     console.print(f"[cyan]Planner 수정 모드 진입: {revise_text[:120]}[/cyan]")
                     with tracer.span("planner-revise") as info:
+                        info["input"] = f"[planner/revise] user_directive:\n{revise_text}"
                         result = pl.run_revise(revise_text, config, paths)
                         info["stdout"] = result.stdout or ""
                         report_subprocess(result, "planner(revise)", console)
@@ -526,6 +529,7 @@ def run_cycle(
                 cp.advance(Phase.CONTRACT, "contract generating")
                 cp.save(paths.checkpoint_file)
                 with sprint_tracer.span("contract") as info:
+                    info["input"] = f"[planner/contract] Sprint {sprint_num} contract generation"
                     result = pl.run_contract(sprint_num, config, paths)
                     info["stdout"] = result.stdout or ""
                     report_subprocess(result, f"planner(contract sprint-{sprint_num})", console)
@@ -565,6 +569,7 @@ def run_cycle(
                             f"중요 결정은 artifacts/decisions/decision-NNN.md, "
                             f"세션 종료 시 artifacts/progress-log.md 최상단에 결과 블록 추가."
                         )
+                        info["input"] = f"[generator/sprint-{sprint_num}] initial_prompt:\n{initial_prompt}"
                         result = subprocess.run(
                             [claude_cli, "-p",
                              "--agent", "generator",
@@ -599,6 +604,7 @@ def run_cycle(
                 cp.save(paths.checkpoint_file)
                 try:
                     with sprint_tracer.span("evaluator") as info:
+                        info["input"] = f"[evaluator/sprint-{sprint_num}] evaluating qa-report"
                         result = ev.run_evaluate(config, paths)
                         info["stdout"] = result.stdout or ""
                         report_subprocess(result, f"evaluator sprint-{sprint_num}", console)
@@ -633,6 +639,7 @@ def run_cycle(
                     cp.save(paths.checkpoint_file)
                     try:
                         with sprint_tracer.span("evaluator-rerun") as info:
+                            info["input"] = f"[evaluator/sprint-{sprint_num}] re-eval after validation fail"
                             result = ev.run_evaluate(config, paths)
                             info["stdout"] = result.stdout or ""
                             report_subprocess(result, f"evaluator-rerun sprint-{sprint_num}", console)
@@ -697,6 +704,7 @@ def run_cycle(
                     cp.save(paths.checkpoint_file)
                     try:
                         with sprint_tracer.span("evaluator-rerun") as info:
+                            info["input"] = f"[evaluator/sprint-{sprint_num}] re-eval after FAIL"
                             result = ev.run_evaluate(config, paths)
                             report_subprocess(result, f"evaluator-rerun sprint-{sprint_num}", console)
                             info["stdout"] = result.stdout or ""

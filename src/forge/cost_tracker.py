@@ -109,6 +109,17 @@ def _extract_tokens_from_jsonl(since: float, until: float) -> dict:
     return totals
 
 
+def _truncate(text: str, limit: int, head: bool = True) -> str:
+    """Langfuse 전송용 텍스트 자르기. head=False면 꼬리 유지 (대부분의 정보는 stdout 끝에 있음)."""
+    if not isinstance(text, str):
+        text = str(text)
+    if len(text) <= limit:
+        return text
+    if head:
+        return text[:limit] + f"\n\n... (truncated {len(text) - limit} chars)"
+    return f"... (truncated {len(text) - limit} chars)\n\n" + text[-limit:]
+
+
 _DURATION_RE = re.compile(r"\|\s*([\d.]+)s\s*\|")
 
 
@@ -271,6 +282,14 @@ class SprintTracer:
                     # model 있으면 Langfuse가 내장 pricing 테이블로 cost 자동 계산.
                     if info["model"]:
                         update_kwargs["model"] = info["model"]
+                    # input: 호출자가 info["input"]에 프롬프트를 기록했으면 전달.
+                    user_input = info.get("input")
+                    if user_input:
+                        update_kwargs["input"] = _truncate(user_input, 8000)
+                    # output: stdout 전체는 크므로 꼬리 일부만 (Langfuse UI 가독성 + payload size).
+                    stdout_raw = info.get("stdout", "") or ""
+                    if stdout_raw:
+                        update_kwargs["output"] = _truncate(stdout_raw, 8000, head=False)
                     lf_span.update(**update_kwargs)
                 except Exception as e:
                     sys.stderr.write(f"[forge] Langfuse span.update failed: {e!r}\n")
