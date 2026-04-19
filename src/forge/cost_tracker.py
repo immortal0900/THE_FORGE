@@ -159,6 +159,7 @@ class SprintTracer:
         self._root_span = None
         self._root_cm = None
         self._propagate_cm = None
+        self._truncate_chars = int(getattr(config, "langfuse_truncate_chars", 8000))
 
         if config.langfuse_enabled:
             try:
@@ -283,13 +284,18 @@ class SprintTracer:
                     if info["model"]:
                         update_kwargs["model"] = info["model"]
                     # input: 호출자가 info["input"]에 프롬프트를 기록했으면 전달.
+                    limit = self._truncate_chars
                     user_input = info.get("input")
                     if user_input:
-                        update_kwargs["input"] = _truncate(user_input, 8000)
+                        update_kwargs["input"] = (
+                            user_input if limit <= 0 else _truncate(user_input, limit)
+                        )
                     # output: stdout 전체는 크므로 꼬리 일부만 (Langfuse UI 가독성 + payload size).
                     stdout_raw = info.get("stdout", "") or ""
                     if stdout_raw:
-                        update_kwargs["output"] = _truncate(stdout_raw, 8000, head=False)
+                        update_kwargs["output"] = (
+                            stdout_raw if limit <= 0 else _truncate(stdout_raw, limit, head=False)
+                        )
                     lf_span.update(**update_kwargs)
                 except Exception as e:
                     sys.stderr.write(f"[forge] Langfuse span.update failed: {e!r}\n")

@@ -69,6 +69,9 @@ class ForgeConfig(BaseSettings):
     # ── 승인 대기 타임아웃 (초). 기본 24시간. ──
     approval_timeout_seconds: int = 86400
 
+    # ── Langfuse span input/output 최대 문자 수. 0 이하면 무제한. ──
+    langfuse_truncate_chars: int = 8000
+
     @property
     def telegram_enabled(self) -> bool:
         return bool(self.telegram_bot_token and self.telegram_chat_id)
