@@ -236,36 +236,37 @@ forge run
 
 ## 8. 원본 하네스와의 비교
 
-2026-04 Anthropic 정책 변경으로 **Claude Code CLI만 Max 구독 쿼터 사용 가능** (제3자 도구 제외). THE FORGE는 공식 CLI를 `subprocess`로 호출하여 월정액 구독 안에서 동작한다.
+2026-04 Anthropic 정책 변경으로 **Claude Code CLI만 Max 구독 쿼터 사용 가능** (제3자 도구 제외). THE FORGE는 공식 CLI를 `subprocess`로 호출하여 월정액 구독 안에서 동작한다. 비교 대상은 Anthropic이 2026-04에 공개한 최종판(v2) 하네스다.
 
-| 관점 | 원본 Agent SDK (2026.03) | THE FORGE |
+| 관점 | Anthropic 원본 v2 (2026.04) | THE FORGE |
 |---|---|---|
-| 세션 | 연속 세션, 역할 전환 | 3개 별도 프로세스 (물리적 격리) |
-| 비용 | API 종량제 | Max 플랜 월정액 구독 |
-| 에이전트 간 통신 | 동일 세션 메모리 | `artifacts/` 파일 기반 |
+| 작업 단위 | 스프린트 제거, 단일 흐름으로 전체 빌드 | 스프린트 반복 (`sprint-contract.md` 기반) |
+| 세션 | 하나의 연속 세션, SDK 자동 컴팩션 | 3개 별도 프로세스 + 스프린트마다 새 세션 |
+| 비용 | API 종량제 (예: 6시간 $200) | Max 플랜 월정액 구독 |
 | 사용자 개입 | 없음 (완전 자율) | Slack/Telegram 승인 + `/revise` 모달 |
 
 <details>
-<summary>전체 비교 (13행)</summary>
+<summary>전체 비교 (14행)</summary>
 
-|  | Anthropic V2 원본 (2026.03) | THE FORGE (Python subprocess) |
+|  | Anthropic v2 (2026.04) | THE FORGE (Python subprocess) |
 |---|---|---|
-| **세션 구조** | 하나의 연속 세션 (역할만 전환) | 3개 별도 프로세스 (`subprocess.run()`) |
-| **오케스트레이터** | Agent SDK (Python/TypeScript) | Python 스크립트 (`run_cycle()`) |
-| **Planner** | 같은 세션에서 역할 전환 프롬프트 | `claude -p --agent planner` (비대화형) |
-| **Generator** | 같은 세션에서 코딩 (완전 자율) | `claude -p --agent generator --max-turns N --permission-mode bypassPermissions` |
-| **Evaluator** | 같은 세션에서 QA (Playwright MCP) | `claude -p --agent evaluator` (비대화형) |
+| **작업 단위** | 스프린트 없음, 한 번의 긴 빌드 | 스프린트 루프 (contract → generate → QA → done) |
+| **세션 구조** | 하나의 연속 세션 | 3개 별도 프로세스 (`subprocess.run()`), 스프린트마다 새 세션 |
+| **오케스트레이터** | Claude Agent SDK | Python 스크립트 (`run_cycle()`) |
+| **Planner** | 연속 세션 내 논리 agent, Skills 접근 (frontend design skill) | `claude -p --agent planner` (비대화형) |
+| **Generator** | 연속 세션 내 논리 agent, 단일 흐름 빌드 | `claude -p --agent generator --max-turns N --permission-mode bypassPermissions` |
+| **Evaluator** | 실행 종료 시 single-pass + Playwright MCP로 UI 조작 | `claude -p --agent evaluator`, 매 스프린트마다 QA |
 | **컨텍스트 관리** | SDK 자동 컴팩션 | 세션 분리로 격리 + Claude Code 내장 컴팩션 |
-| **에이전트 간 통신** | 파일 기반 (`artifacts/`) | 파일 기반 (`artifacts/`) |
+| **에이전트 간 통신** | 파일 기반 (agent가 파일을 쓰면 다른 agent가 읽음) | 파일 기반 (`artifacts/`) |
 | **인간 개입** | 없음 (완전 자율) | 승인 게이트 + Slack/Telegram + `/revise` 모달 |
-| **비용 청구** | API 과금 ($200/6시간 예시) | Max 플랜 (월정액 구독) |
+| **비용 청구** | API 과금 (예시 6시간 $200) | Max 플랜 (월정액 구독) |
 | **SDK 의존성** | 필수 (`claude-agent-sdk`) | 없음 (CLI만 사용) |
 | **원격 알림** | 없음 | Slack (Socket Mode + Slash Commands) 또는 Telegram |
 | **체크포인트 복구** | 없음 (연속 세션이므로) | 있음 (`.harness-checkpoint` + Phase IntEnum) |
 | **Windows 호환** | SDK anyio 충돌 보고 | 네이티브 (`pathlib`, `subprocess`, `msvcrt`) |
-| **도구 제어** | 개발자가 tool schema 직접 정의 | Claude Code 내장 (Read/Write/Bash + MCP/Skill) |
+| **도구 제어** | Agent SDK 내장 + MCP/Skills | Claude Code 내장 (Read/Write/Bash + MCP/Skills) |
 
-보존된 원본의 핵심 이점: 역할 분리, 자기 합리화 방지, Evaluator의 물리적 격리.
+보존된 원본의 핵심 이점: 역할 분리, 자기 합리화 방지, Evaluator의 객관성. 차별화 지점: Max 플랜 쿼터 내 동작, 프로세스 격리, 인간 개입 게이트, 체크포인트 복구.
 
 </details>
 
