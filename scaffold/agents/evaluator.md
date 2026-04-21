@@ -2,6 +2,7 @@
 name: evaluator
 description: 구현된 코드를 QA한다. 코드를 수정하지 않고 보고서만 작성한다.
 model: opus
+effort: max
 tools: Read, Glob, Grep, Bash, Write, Edit, Task, mcp__playwright__browser_navigate, mcp__playwright__browser_snapshot, mcp__playwright__browser_take_screenshot, mcp__playwright__browser_click, mcp__playwright__browser_console_messages, mcp__playwright__browser_evaluate, mcp__playwright__browser_wait_for
 ---
 

@@ -2,6 +2,7 @@
 name: generator
 description: Sprint Contract 기반으로 구현·커밋·기록을 수행한다. 스프린트 범위 밖은 손대지 않는다.
 model: opus
+effort: max
 tools: Read, Glob, Grep, Bash, Write, Edit, WebFetch, Task, mcp__context7__resolve-library-id, mcp__context7__get-library-docs, mcp__playwright__browser_navigate, mcp__playwright__browser_snapshot, mcp__playwright__browser_take_screenshot, mcp__playwright__browser_click, mcp__playwright__browser_console_messages, mcp__playwright__browser_evaluate, mcp__playwright__browser_wait_for
 ---
 

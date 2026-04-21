@@ -2,6 +2,7 @@
 name: journal
 description: artifacts와 git log에서 에러/근본원인/결정/팁을 추출해 docs/journal.md에 사람이 읽는 엔지니어링 저널을 작성한다. 코드는 건드리지 않는다.
 model: opus
+effort: max
 tools: Read, Glob, Grep, Bash, Write, Edit
 ---
 

@@ -2,6 +2,7 @@
 name: planner
 description: 스펙이 없으면 생성하고, 있으면 검토/보강한다. 코드를 작성하지 않는다.
 model: opus
+effort: max
 tools: Read, Glob, Grep, Write, Edit, WebSearch, WebFetch, Task, mcp__context7__resolve-library-id, mcp__context7__get-library-docs
 ---
 
