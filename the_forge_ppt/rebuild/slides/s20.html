@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<title>20 — THE FORGE 소개 + Harness Pipeline</title>
+<link rel="stylesheet" href="../assets/style.css" />
+<style>
+  .s20 { padding: 50px 60px; height: 100%; display: flex; flex-direction: column; position: relative; }
+  .s20 .eyebrow {
+    display: inline-block; background: #EFEAFF; color: var(--purple);
+    font-weight: 700; padding: 6px 14px; border-radius: 999px; font-size: 18px; margin-bottom: 12px;
+  }
+  .s20 h1 {
+    font-size: 80px; line-height: 1.05; letter-spacing: -1.5px; font-weight: 900; margin-bottom: 6px;
+  }
+  .s20 .subtitle { font-size: 22px; font-weight: 600; color: #2B2B35; margin-bottom: 24px; }
+
+  .s20 .problem-bar {
+    background: #FAFAFD; border: 1px solid #EDEDF3; border-radius: 14px;
+    padding: 14px 24px; display: flex; align-items: center; gap: 16px; margin-bottom: 28px;
+  }
+  .s20 .problem-bar .icon { font-size: 28px; }
+  .s20 .problem-bar .text { font-size: 19px; color: #2B2B35; font-weight: 600; }
+  .s20 .problem-bar .highlight { color: var(--purple); font-weight: 800; }
+
+  .s20 .pipeline { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+
+  .s20 .flow-container {
+    display: flex; align-items: flex-start; justify-content: center; gap: 0; width: 100%;
+  }
+
+  .s20 .agent-card {
+    background: #fff; border: 1.5px solid #E5E5EA; border-radius: 18px;
+    padding: 24px 28px; width: 420px; box-shadow: 0 8px 24px rgba(20,20,30,0.08);
+    display: flex; flex-direction: column; align-items: center; text-align: center;
+    position: relative;
+  }
+  .s20 .agent-card.active {
+    background: linear-gradient(135deg, #7C5CFC 0%, #5A3EE5 100%);
+    color: #fff; border: 0; box-shadow: 0 10px 30px rgba(90,62,229,0.3);
+  }
+  .s20 .agent-card .agent-icon { font-size: 36px; margin-bottom: 8px; }
+  .s20 .agent-card .agent-name { font-size: 26px; font-weight: 900; margin-bottom: 6px; }
+  .s20 .agent-card.active .agent-name { color: #fff; }
+  .s20 .agent-card .agent-role { font-size: 17px; color: #4B4B55; font-weight: 600; }
+  .s20 .agent-card.active .agent-role { color: rgba(255,255,255,0.9); }
+
+  .s20 .doc-pills { display: flex; gap: 8px; margin-top: 14px; flex-wrap: wrap; justify-content: center; }
+  .s20 .doc-pill {
+    padding: 6px 14px; border-radius: 999px; font-size: 15px; font-weight: 700;
+    border: 1px solid #DCDCE2; background: #fff; color: #2B2B35;
+    box-shadow: 0 2px 8px rgba(20,20,30,0.04);
+  }
+  .s20 .agent-card.active .doc-pill {
+    background: rgba(255,255,255,0.2); border-color: rgba(255,255,255,0.4); color: #fff;
+  }
+
+  .s20 .session-badge {
+    position: absolute; top: -14px; right: 16px;
+    background: #fff; border: 1.5px solid #E5E5EA; border-radius: 10px;
+    padding: 4px 12px; font-size: 14px; font-weight: 800; color: var(--purple);
+    box-shadow: 0 3px 10px rgba(20,20,30,0.06);
+  }
+  .s20 .agent-card.active .session-badge { background: #fff; color: var(--purple); }
+
+  .s20 .flow-arrow {
+    display: flex; align-items: center; font-size: 36px; color: #B9B9C2;
+    padding: 0 8px; margin-top: 40px;
+  }
+  .s20 .flow-arrow .arrow-doc {
+    font-size: 14px; font-weight: 700; color: var(--purple);
+    text-align: center; line-height: 1.3;
+  }
+
+  .s20 .bottom-pills {
+    display: flex; gap: 14px; justify-content: center; margin-top: 28px;
+  }
+  .s20 .stat-pill {
+    padding: 10px 22px; border-radius: 14px;
+    background: #fff; border: 1.5px solid #E5E5EA;
+    font-size: 18px; font-weight: 700; color: #111;
+    box-shadow: 0 4px 14px rgba(20,20,30,0.06);
+    display: flex; align-items: center; gap: 8px;
+  }
+  .s20 .stat-pill .num { color: var(--purple); font-weight: 900; font-size: 22px; }
+
+  .s20 .loop-arrow {
+    display: flex; align-items: center; justify-content: center; margin-top: 16px; gap: 8px;
+  }
+  .s20 .loop-label {
+    font-size: 16px; font-weight: 700; color: var(--purple);
+    background: #F5F2FF; padding: 6px 16px; border-radius: 999px;
+    border: 1px solid #E1D7FF;
+  }
+</style>
+</head>
+<body>
+<div class="deck"><section class="slide"><div class="s20">
+
+  <span class="eyebrow">THE FORGE Project</span>
+  <h1>Multi-Agent<br/>Harness Pattern</h1>
+  <div class="subtitle">LLM Context Saturation - Session Separation + Document-Based Interface</div>
+
+  <div class="problem-bar">
+    <div class="icon">&#9888;</div>
+    <div class="text">Context Window <span class="highlight">60%</span> saturation - performance degradation (hallucination, context loss, high latency)</div>
+  </div>
+
+  <div class="pipeline">
+    <div class="flow-container">
+
+      <!-- Planner -->
+      <div class="agent-card">
+        <div class="session-badge">Session 1-2</div>
+        <div class="agent-icon">&#128736;</div>
+        <div class="agent-name">Planner</div>
+        <div class="agent-role">Spec + Sprint Contract</div>
+        <div class="doc-pills">
+          <span class="doc-pill">spec.md</span>
+          <span class="doc-pill">plan-review.md</span>
+          <span class="doc-pill">sprint-contract.md</span>
+        </div>
+      </div>
+
+      <!-- Arrow 1 -->
+      <div class="flow-arrow">
+        <div style="display:flex;flex-direction:column;align-items:center;">
+          <div>&#10132;</div>
+          <div class="arrow-doc">Document<br/>Handoff</div>
+        </div>
+      </div>
+
+      <!-- Generator -->
+      <div class="agent-card active">
+        <div class="session-badge">Session 3</div>
+        <div class="agent-icon">&#9881;</div>
+        <div class="agent-name">Generator</div>
+        <div class="agent-role">Code + Commit + Log</div>
+        <div class="doc-pills">
+          <span class="doc-pill">source code</span>
+          <span class="doc-pill">progress-log.md</span>
+        </div>
+      </div>
+
+      <!-- Arrow 2 -->
+      <div class="flow-arrow">
+        <div style="display:flex;flex-direction:column;align-items:center;">
+          <div>&#10132;</div>
+          <div class="arrow-doc">Document<br/>Handoff</div>
+        </div>
+      </div>
+
+      <!-- Evaluator -->
+      <div class="agent-card">
+        <div class="session-badge">Session 4</div>
+        <div class="agent-icon">&#128269;</div>
+        <div class="agent-name">Evaluator</div>
+        <div class="agent-role">QA + Pass/Fail</div>
+        <div class="doc-pills">
+          <span class="doc-pill">qa-report.md</span>
+        </div>
+      </div>
+
+    </div>
+
+    <div class="loop-arrow">
+      <span class="loop-label">&#x21BB; FAIL - Return to Generator with qa-report.md</span>
+    </div>
+
+    <div class="bottom-pills">
+      <div class="stat-pill"><span class="num">9</span> Phase Checkpoints</div>
+      <div class="stat-pill"><span class="num">3+</span> Independent Sessions</div>
+      <div class="stat-pill">Document-Based Interface</div>
+      <div class="stat-pill">Zero Context Sharing</div>
+    </div>
+  </div>
+
+</div></section></div>
+</body></html>
