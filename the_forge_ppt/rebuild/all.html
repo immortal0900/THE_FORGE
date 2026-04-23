@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<title>AI Agent Developer 황화인 — 전체 슬라이드</title>
+<link rel="stylesheet" href="assets/style.css" />
+<style>
+  body { background: #202028; }
+  .stack { display: flex; flex-direction: column; gap: 24px; padding: 30px 0; align-items: center; }
+  .slide-box {
+    width: 1920px; height: 1080px; background: #fff;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.4);
+    position: relative; overflow: hidden;
+  }
+  .slide-box iframe { width: 100%; height: 100%; border: 0; }
+  .slide-label {
+    position: absolute; top: 10px; right: 10px;
+    background: rgba(20,20,30,0.75); color: #fff;
+    padding: 6px 12px; border-radius: 999px; font-weight: 700; font-size: 15px;
+    font-family: 'Inter', sans-serif;
+  }
+</style>
+</head>
+<body>
+<div class="stack" id="stack"></div>
+<script>
+  const total = 23;
+  const stack = document.getElementById('stack');
+  for (let i = 1; i <= total; i++) {
+    const n = String(i).padStart(2, '0');
+    const box = document.createElement('div');
+    box.className = 'slide-box';
+    box.innerHTML = `<iframe src="slides/s${n}.html" scrolling="no"></iframe><div class="slide-label">${n} / ${total}</div>`;
+    stack.appendChild(box);
+  }
+</script>
+</body>
+</html>
