@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<title>22 — Remote Control via Slack + File-System MQ</title>
+<link rel="stylesheet" href="../assets/style.css" />
+<style>
+  .s22 { padding: 36px 60px 28px; height: 100%; display: flex; flex-direction: column; position: relative; }
+  .s22 .eyebrow {
+    display: inline-block; background: #EFEAFF; color: var(--purple);
+    font-weight: 700; padding: 6px 14px; border-radius: 999px; font-size: 18px; margin-bottom: 8px;
+  }
+  .s22 h1 {
+    font-size: 60px; line-height: 1.05; letter-spacing: -1.5px; font-weight: 900; margin-bottom: 6px;
+  }
+  .s22 .subtitle { font-size: 20px; font-weight: 600; color: #2B2B35; margin-bottom: 22px; }
+
+  .s22 .pipeline-canvas {
+    flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 24px;
+  }
+  .s22 .pipe-row {
+    display: flex; align-items: center; justify-content: center; gap: 0;
+  }
+
+  .s22 .pipe-node {
+    background: #fff; border: 1.5px solid #E5E5EA; border-radius: 18px;
+    padding: 22px 24px; box-shadow: 0 8px 24px rgba(20,20,30,0.08);
+    display: flex; flex-direction: column; align-items: center; text-align: center;
+    min-width: 200px;
+  }
+  .s22 .pipe-node.em {
+    background: linear-gradient(135deg, #7C5CFC 0%, #5A3EE5 100%);
+    color: #fff; border: 0; box-shadow: 0 10px 30px rgba(90,62,229,0.3);
+  }
+  .s22 .pipe-node .node-icon { font-size: 32px; margin-bottom: 8px; }
+  .s22 .pipe-node .node-title { font-size: 22px; font-weight: 900; margin-bottom: 4px; }
+  .s22 .pipe-node .node-sub { font-size: 15px; font-weight: 600; color: #4B4B55; }
+  .s22 .pipe-node.em .node-sub { color: rgba(255,255,255,0.85); }
+
+  .s22 .pipe-arrow {
+    display: flex; flex-direction: column; align-items: center; padding: 0 10px;
+  }
+  .s22 .pipe-arrow .arrow-icon { font-size: 30px; color: #B9B9C2; }
+  .s22 .pipe-arrow .arrow-label {
+    font-size: 13px; font-weight: 700; color: var(--purple);
+    background: #F5F2FF; padding: 3px 10px; border-radius: 999px; margin-top: 4px;
+    border: 1px solid #E1D7FF; white-space: nowrap;
+  }
+
+  .s22 .mq-box {
+    background: #fff; border: 2px dashed #B9B9C2; border-radius: 16px;
+    padding: 18px 22px; min-width: 260px; position: relative;
+  }
+  .s22 .mq-box .mq-label {
+    position: absolute; top: -14px; left: 18px;
+    background: #fff; padding: 0 8px; font-weight: 800; color: var(--purple); font-size: 16px;
+  }
+  .s22 .mq-box .mq-title { font-size: 20px; font-weight: 900; text-align: center; margin-bottom: 10px; color: #111; }
+
+  .s22 .signal-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 8px;
+  }
+  .s22 .signal-card {
+    background: #FAFAFD; border: 1px solid #EDEDF3; border-radius: 10px;
+    padding: 8px 12px; display: flex; align-items: center; gap: 8px;
+  }
+  .s22 .signal-card .sig-icon { font-size: 20px; }
+  .s22 .signal-card .sig-name { font-size: 15px; font-weight: 800; color: #111; }
+
+  .s22 .payload-example {
+    margin-top: 10px; background: #1D1D1F; color: #7C5CFC; border-radius: 8px;
+    padding: 8px 14px; font-family: 'Inter', monospace; font-size: 14px; font-weight: 600;
+    text-align: center;
+  }
+
+  .s22 .bottom-pills {
+    display: flex; gap: 14px; justify-content: center; margin-top: 18px;
+  }
+  .s22 .stat-pill {
+    padding: 10px 22px; border-radius: 14px;
+    background: #fff; border: 1.5px solid #E5E5EA;
+    font-size: 18px; font-weight: 700; color: #111;
+    box-shadow: 0 4px 14px rgba(20,20,30,0.06);
+    display: flex; align-items: center; gap: 8px;
+  }
+  .s22 .stat-pill .num { color: var(--purple); font-weight: 900; font-size: 22px; }
+
+  .s22 .http-desc {
+    display: flex; justify-content: center; width: 100%;
+  }
+  .s22 .http-card {
+    background: #FAFAFD; border: 1px solid #EDEDF3; border-radius: 14px;
+    padding: 16px 28px; display: flex; align-items: center; gap: 16px;
+    max-width: 900px;
+  }
+  .s22 .http-icon { font-size: 30px; }
+  .s22 .http-title { font-size: 20px; font-weight: 900; color: #111; margin-bottom: 4px; }
+  .s22 .http-detail { font-size: 16px; color: #4B4B55; font-weight: 600; line-height: 1.4; }
+</style>
+</head>
+<body>
+<div class="deck"><section class="slide"><div class="s22">
+
+  <span class="eyebrow">THE FORGE - Remote Control</span>
+  <h1>Slack + File-System MQ</h1>
+  <div class="subtitle">Unattended agent remote control via Socket Mode + file-based signal queue</div>
+
+  <div class="pipeline-canvas">
+    <div class="pipe-row">
+
+    <!-- Human -->
+    <div class="pipe-node">
+      <div class="node-icon">&#128100;</div>
+      <div class="node-title">Human</div>
+      <div class="node-sub">Slack App</div>
+    </div>
+
+    <!-- Arrow: WebSocket -->
+    <div class="pipe-arrow">
+      <div class="arrow-icon">&#10132;</div>
+      <div class="arrow-label">WebSocket</div>
+    </div>
+
+    <!-- Socket Mode -->
+    <div class="pipe-node">
+      <div class="node-icon">&#128268;</div>
+      <div class="node-title">Socket Mode</div>
+      <div class="node-sub">10 parallel connections</div>
+    </div>
+
+    <!-- Arrow: Events -->
+    <div class="pipe-arrow">
+      <div class="arrow-icon">&#10132;</div>
+      <div class="arrow-label">Events</div>
+    </div>
+
+    <!-- Orchestrator -->
+    <div class="pipe-node em">
+      <div class="node-icon">&#9881;</div>
+      <div class="node-title">Orchestrator</div>
+      <div class="node-sub">Python Harness</div>
+    </div>
+
+    <!-- Arrow: File Write -->
+    <div class="pipe-arrow">
+      <div class="arrow-icon">&#10132;</div>
+      <div class="arrow-label">File Write</div>
+    </div>
+
+    <!-- File System MQ -->
+    <div class="mq-box">
+      <div class="mq-label">FILE-SYSTEM MQ</div>
+      <div class="signal-grid">
+        <div class="signal-card">
+          <div class="sig-icon">&#9989;</div>
+          <div class="sig-name">approval</div>
+        </div>
+        <div class="signal-card">
+          <div class="sig-icon">&#9193;</div>
+          <div class="sig-name">skip</div>
+        </div>
+        <div class="signal-card">
+          <div class="sig-icon">&#128269;</div>
+          <div class="sig-name">eval</div>
+        </div>
+        <div class="signal-card">
+          <div class="sig-icon">&#9998;</div>
+          <div class="sig-name">revise</div>
+        </div>
+      </div>
+      <div class="payload-example">project::action</div>
+    </div>
+
+    <!-- Arrow: Signal Read -->
+    <div class="pipe-arrow">
+      <div class="arrow-icon">&#10132;</div>
+      <div class="arrow-label">Signal Read</div>
+    </div>
+
+    <!-- Agent Session -->
+    <div class="pipe-node">
+      <div class="node-icon">&#129302;</div>
+      <div class="node-title">Agent</div>
+      <div class="node-sub">Claude Code Session</div>
+    </div>
+
+    </div>
+
+    <!-- HTTP channel description -->
+    <div class="http-desc">
+      <div class="http-card">
+        <div class="http-icon">&#128259;</div>
+        <div class="http-text">
+          <div class="http-title">Dual Channel Architecture</div>
+          <div class="http-detail">WebSocket receives events (slash commands, button clicks) / HTTP sends messages, uploads files (qa-report.md, screenshots)</div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="bottom-pills">
+    <div class="stat-pill"><span class="num">10</span> parallel connections</div>
+    <div class="stat-pill">WebSocket + HTTP dual channel</div>
+    <div class="stat-pill"><span class="num">4</span> signal types</div>
+    <div class="stat-pill">Zero-dependency MQ</div>
+  </div>
+
+</div></section></div>
+</body></html>
