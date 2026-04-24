@@ -44,3 +44,11 @@ target-version = "py312"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+
+[tool.forge]
+max_sprint_minutes = 180
+max_generator_minutes = 100
+planner_max_turns = 15
+planner_review_max_turns = 10
+contract_max_turns = 12
+evaluator_max_turns = 120
