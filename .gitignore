@@ -50,8 +50,29 @@ THE_FORGE_명령어모음.md
 README2.md
 readme3.md
 slack기획.md
+THE_FORGE_PROJECT.md
+index.html
+rebuild/
+"the_forge_ppt/"
 
-# Claude Code 로컬
-.claude/settings.local.json
-.claude/settings.json
-"the_forge_ppt/" 
+# Claude Code 로컬 (전체 무시 - 사용자별 설정/에이전트 정의)
+.claude/
+
+# forge runtime
+artifacts/spec.md
+artifacts/plan-review.md
+artifacts/sprint-contract.md
+artifacts/progress-log.md
+artifacts/qa-report.md
+artifacts/harness-cost-log.txt
+artifacts/.harness-checkpoint
+artifacts/.backup/
+artifacts/specs/
+artifacts/decisions/
+artifacts/.approval-signal
+artifacts/.skip-signal
+artifacts/.continue-signal
+artifacts/.exit-signal
+artifacts/.eval-signal
+artifacts/.stop-signal
+artifacts/.revise-signal
