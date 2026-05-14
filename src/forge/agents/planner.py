@@ -5,6 +5,11 @@ stream-json 양방향. 함수 시그니처는 그대로 두어 호출처(orchest
 인터페이스 호환을 유지한다. 결과 객체는 RunResult (subprocess.CompletedProcess
 호환: returncode / stdout / stderr).
 
+토대 3 (docs/plan-judgment-velocity.md): 사용자가 docs/essence.md 등으로 본질을
+제공한 경우, planner prompt에 inline으로 inject한다. planner는 본질을 *원본
+그대로 spec.md 본문에 반영*만 한다 (자체 추가/수정 금지). frontmatter는
+orchestrator가 자동 박는다.
+
 NOTE (큰 그림 1 단계에서 처리 예정):
     - Mode A(run_generate) ↔ Mode B(run_review) ↔ Mode D(run_revise) 는
       streaming 세션이 살아있는 한 *같은 세션*에 흡수되어야 한다.
@@ -13,18 +18,56 @@ NOTE (큰 그림 1 단계에서 처리 예정):
 
 from __future__ import annotations
 
+from typing import Optional
+
 from ..config import ForgeConfig, ProjectPaths
+from ..judgment import EssenceSource
 from .runner import RunResult, run_agent_sync
+
+
+def _format_essence_for_prompt(essence: EssenceSource) -> str:
+    """essence를 planner prompt에 inline 박을 마크다운 블록으로 직렬화.
+
+    planner는 이 블록을 *원본 그대로* spec.md 본문에 반영한다 (계약).
+    """
+    lines = [
+        "## 본질 (essence_axioms) — 사용자가 외부에서 제공",
+        f"_출처: {essence.source}_",
+        "",
+    ]
+    for ax in essence.axioms:
+        weight_badge = f"[{ax.weight}] " if ax.weight else ""
+        lines.append(f"- **{ax.id}** {weight_badge}{ax.statement}")
+        if ax.rationale:
+            lines.append(f"  - 이유: {ax.rationale}")
+        if ax.falsifiable_by:
+            lines.append(f"  - 검증 방법: {ax.falsifiable_by}")
+    lines.extend(
+        [
+            "",
+            "**계약**: 이 본질은 *원본 그대로 spec.md 본문에 반영*만 하라. "
+            "자체 추가/수정/추출 금지. spec.md 상단 frontmatter(--- ... ---)는 "
+            "orchestrator가 자동으로 박으므로 손대지 마라.",
+            "",
+        ]
+    )
+    return "\n".join(lines)
 
 
 def run_generate(
     request: str,
     config: ForgeConfig,
     paths: ProjectPaths,
+    essence: Optional[EssenceSource] = None,
 ) -> RunResult:
-    """모드 A — spec.md 생성."""
+    """모드 A — spec.md 생성.
+
+    essence가 제공되면 prompt에 inline 인용. 없으면 사용자 request 그대로.
+    """
+    essence_block = _format_essence_for_prompt(essence) + "\n" if essence else ""
     prompt = (
         f"사용자 요청: {request}\n\n"
+        f"{essence_block}"
         f"artifacts/spec.md가 없거나 사용자가 재생성을 요청했다. "
         f"생성 모드로 동작하여 artifacts/spec.md를 작성하라."
     )
@@ -36,9 +79,15 @@ def run_generate(
     )
 
 
-def run_review(config: ForgeConfig, paths: ProjectPaths) -> RunResult:
+def run_review(
+    config: ForgeConfig,
+    paths: ProjectPaths,
+    essence: Optional[EssenceSource] = None,
+) -> RunResult:
     """모드 B — 기존 spec.md 검토."""
+    essence_block = _format_essence_for_prompt(essence) + "\n" if essence else ""
     prompt = (
+        f"{essence_block}"
         "artifacts/spec.md가 이미 존재한다. **반드시 Mode B(리뷰 모드)로 동작**하라. "
         "생성 모드로 전환하지 말 것. "
         "최우선 작업: artifacts/plan-review.md를 작성하라 "
@@ -57,9 +106,12 @@ def run_contract(
     sprint_num: int,
     config: ForgeConfig,
     paths: ProjectPaths,
+    essence: Optional[EssenceSource] = None,
 ) -> RunResult:
     """모드 C — Sprint Contract 생성."""
+    essence_block = _format_essence_for_prompt(essence) + "\n" if essence else ""
     prompt = (
+        f"{essence_block}"
         f"Sprint {sprint_num}의 sprint-contract.md를 생성하라. "
         f"templates/sprint-contract-template.md 형식을 따르고, "
         f"spec.md / specs/ / progress-log.md / sprint-*-done.md를 반영하라."

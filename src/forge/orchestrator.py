@@ -429,6 +429,19 @@ def run_cycle(
 
         # ── Phase 1: Planning (프로젝트당 1회) ──
         if cp.should_run(Phase.PLANNING):
+            # 토대 3: 사용자가 제공한 본질(essence_axioms) 로드. 없으면 None → 강제 X.
+            # docs/plan-judgment-velocity.md 토대 3 참조.
+            from .judgment import inject_essence_into_spec, load_essence_for_project
+
+            essence = load_essence_for_project(
+                paths.project_root,
+                hint_path=config.essence_source_path or None,
+            )
+            if essence:
+                console.print(
+                    f"[cyan]essence 로드: {essence.source} ({len(essence.axioms)} axioms)[/cyan]"
+                )
+
             sprint_num = paths.current_sprint()
             tracer = SprintTracer(config, sprint_num, paths.project_name, paths.cost_log)
             _active_tracers.append(tracer)
@@ -443,14 +456,23 @@ def run_cycle(
                         notifier.notify("error", "spec.md가 없고 요청도 없습니다.", project_name=paths.project_name)
                         return 2
                     info["input"] = f"[planner/generate] user_request:\n{request}"
-                    result = pl.run_generate(request, config, paths)
+                    result = pl.run_generate(request, config, paths, essence=essence)
                     info["stdout"] = result.stdout or ""
                     report_subprocess(result, "planner(generate)", console)
                 else:
                     info["input"] = "[planner/review] reviewing existing spec.md"
-                    result = pl.run_review(config, paths)
+                    result = pl.run_review(config, paths, essence=essence)
                     info["stdout"] = result.stdout or ""
                     report_subprocess(result, "planner(review)", console)
+
+            # 토대 3: planner 종료 후 spec.md frontmatter에 essence 인용 (있을 때만).
+            if essence and paths.spec.exists():
+                if inject_essence_into_spec(paths.spec, essence):
+                    console.print(
+                        f"[cyan]spec.md frontmatter에 essence 인용 박음 "
+                        f"({len(essence.axioms)} axioms)[/cyan]"
+                    )
+
             cp.note("planner completed, awaiting plan review approval")
             cp.save(paths.checkpoint_file)
 
@@ -596,11 +618,19 @@ def run_cycle(
 
             # Phase 2: Sprint Contract
             if cp.should_run(Phase.CONTRACT):
+                # 토대 3: contract는 sprint마다 반복되므로 essence를 매번 새로 로드 (사용자가
+                # docs/essence.md를 sprint 도중 수정했을 수 있음).
+                from .judgment import load_essence_for_project as _load_essence
+
+                sprint_essence = _load_essence(
+                    paths.project_root,
+                    hint_path=config.essence_source_path or None,
+                )
                 cp.advance(Phase.CONTRACT, f"contract generating (sprint {sprint_num})")
                 cp.save(paths.checkpoint_file)
                 with sprint_tracer.span("contract") as info:
                     info["input"] = f"[planner/contract] Sprint {sprint_num} contract generation"
-                    result = pl.run_contract(sprint_num, config, paths)
+                    result = pl.run_contract(sprint_num, config, paths, essence=sprint_essence)
                     info["stdout"] = result.stdout or ""
                     report_subprocess(result, f"planner(contract sprint-{sprint_num})", console)
 

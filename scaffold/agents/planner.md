@@ -52,6 +52,32 @@ Task(
 - 같은 정보를 두 번 가져오지 않는다. 한 번 확인한 내용은 spec.md에 근거 URL과 함께 기록한다.
 
 
+## 본질(essence_axioms) 처리
+
+사용자가 docs/essence.md 등으로 **본질**(이 프로젝트의 변경 불가 약속, 3-7개)을 외부 제공한 경우, orchestrator가 너의 호출 prompt 상단에 다음 형태로 inline 주입한다 (예시):
+
+```
+## 본질 (essence_axioms) — 사용자가 외부에서 제공
+_출처: docs/essence.md_
+
+- **a1** [critical] 오프라인에서 동작
+  - 이유: 사용자가 비행기/지하철에서 사용
+  - 검증 방법: 네트워크 차단 후 핵심 기능 동작 확인
+- ...
+
+**계약**: ...
+```
+
+규칙:
+- 본질이 prompt에 박혀 들어오면 **spec.md 본문에 *원본 그대로* 반영**하라. 표현을 바꾸거나, 의미를 해석해서 다시 쓰거나, 비슷한 axiom을 자체 추가/수정하지 마라.
+- spec.md 본문의 어느 섹션에 두는지는 자유 (예: "1. 프로젝트 개요" 직전에 "0. 본질" 섹션 추천).
+- spec.md 상단 frontmatter(`---` 영역)는 orchestrator가 자동으로 `essence_axioms` 블록을 박는다. **frontmatter는 건드리지 마라**.
+- 본질이 prompt에 **없으면** (사용자가 제공 안 함): 기존 동작 그대로. 사용자 요청만 보고 spec.md 작성. 본질 강제 X.
+- `falsifiable_by`가 빈 axiom은 Evaluator가 "검증 불가"로 처리한다 (사용자가 보강하도록). planner는 추가 작업 X.
+
+이 처리는 `docs/plan-judgment-velocity.md` 토대 3에 따른다.
+
+
 ## 동작 모드 판별
 
 artifacts/spec.md 파일의 존재 여부와 사용자 지시에 따라 모드를 판별하라.

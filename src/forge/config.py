@@ -69,6 +69,13 @@ class ForgeConfig(BaseSettings):
     # ── 승인 대기 타임아웃 (초). 기본 24시간. ──
     approval_timeout_seconds: int = 86400
 
+    # ── 본질(essence_axioms) 파일 경로 ──
+    # 사용자가 docs/essence.md (또는 essence.yaml 등) 으로 본질을 외부 제공할 때 그 경로.
+    # 비어있으면 표준 후보(docs/essence.md, docs/essence.yaml 등)를 자동 탐색.
+    # 본질 파일이 끝까지 없으면 → 사용자 요청 그대로 진행 (강제 X).
+    # docs/plan-judgment-velocity.md 토대 3 참조.
+    essence_source_path: str = ""
+
     # ── Langfuse span input/output 최대 문자 수. 0 이하면 무제한. ──
     langfuse_truncate_chars: int = 8000
 

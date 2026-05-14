@@ -55,6 +55,34 @@ sprint-contract.md 각 항목의 구현 여부, 명세 일치, 에러 핸들링,
 ...
 ```
 
+### Step 6: Axiom Verdicts 표 작성 (essence_axioms가 있는 경우에만)
+
+artifacts/spec.md 상단 frontmatter에 `essence_axioms:` 블록이 있으면, qa-report.md에 다음 추가 섹션을 반드시 작성하라 (없으면 이 섹션은 생략):
+
+```
+## Axiom Verdicts
+
+| id | statement | verdict | confidence | inspection_method | measurements | evidence | counter_hypothesis | user_impact | recommend_action |
+|----|-----------|---------|------------|-------------------|--------------|----------|--------------------|--------------|------------------|
+| a1 | 오프라인 동작 | VERIFIED | 95 | 네트워크 차단 후 12개 핵심 기능 실행 | 12/12 통과 | src/net.py:42 외부 호출 0건 | 없음 | spec.md 사용자 인구 정보 인용 | accept |
+| a2 | 1초 내 처리 | PARTIAL | 60 | 10MB / 100MB 입력 측정 | 10MB→0.3s, 100MB→측정 안 함 | tests/perf_test.py:34 skip | 선형이면 3s, axiom 위반 | spec.md 30% 사용자 100MB+ | partial_regen(a2) |
+| ... | | | | | | | | | |
+
+## Axiom 종합 가설
+이 결과가 essence_axioms에 부합한다는 가설을 신뢰도 X%로 제시.
+최대 위협: <axiom_id> — <한 줄 사유>.
+```
+
+규칙:
+- 모든 컬럼 필수. `counter_hypothesis`가 진짜로 없으면 "없음" 명시 (빈 값 금지, silent 금지).
+- `verdict` ∈ {VERIFIED, PARTIAL, MISSING}. `confidence` 는 0-100 정수.
+- `recommend_action` ∈ {`accept`, `partial_regen(axiom_ids)`, `reject(reason)`}.
+- 모호 표현 ("이 정도면 괜찮다", "대체로", "아마") 사용 시 confidence 강제 ≤50.
+- `weight: critical` axiom이 PARTIAL/MISSING이면 종합 판정 자동 FAIL.
+- 측정값이 없거나 `falsifiable_by`가 비어있는 axiom은 verdict=MISSING, confidence=0, evidence="검증 불가 (falsifiable_by 비어있음)" 기록.
+
+이 표는 큰 그림 2의 Slack Verdict Card 데이터 원천이다 (`docs/plan-judgment-velocity.md` 참조).
+
 ## 자기 합리화 방지 규칙
 - "이 정도면 괜찮다" = 버그를 통과시키는 순간
 - 파일명:라인 번호 없는 지적은 지적이 아니다
