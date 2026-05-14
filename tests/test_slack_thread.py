@@ -215,3 +215,121 @@ def test_send_verdict_card_attaches_buttons(tmp_path):
     assert "forge_resume" in action_ids
     assert "forge_revise" in action_ids
     assert "forge_exit" in action_ids
+
+
+# ── 큰 그림 1: ASK_USER 옵션 카드 + 응답 라우팅 ─────────────────────────────
+
+
+_SAMPLE_ASK = {
+    "type": "ask_user",
+    "qid": "abc-123",
+    "axiom_link": "a2",
+    "situation": "큰 파일 처리 분기",
+    "options": [
+        {
+            "id": "A",
+            "label": "스트리밍",
+            "icon": "🚀",
+            "mechanism": "청크 단위 처리",
+            "expected_metric": "100MB → 0.8s",
+            "side_effect": "복구 코드 +50줄",
+            "similar_case": "src/import.py:88",
+        },
+        {
+            "id": "B",
+            "label": "일괄 로드",
+            "icon": "🛡️",
+            "mechanism": "전체 로드 후 처리",
+            "expected_metric": "100MB → 5.4s",
+            "side_effect": "코드 단순",
+            "similar_case": None,
+        },
+    ],
+    "recommend": "A",
+    "recommend_basis": "axiom a2 critical, sprint 범위 내",
+}
+
+
+def test_send_question_card_returns_false_when_missing_qid(tmp_path):
+    notifier, paths = _build_notifier(tmp_path)
+    ask = dict(_SAMPLE_ASK)
+    ask["qid"] = ""
+    assert notifier.send_question_card(ask) is False
+    notifier._web.chat_postMessage.assert_not_called()
+
+
+def test_send_question_card_returns_false_when_no_options(tmp_path):
+    notifier, paths = _build_notifier(tmp_path)
+    ask = dict(_SAMPLE_ASK)
+    ask["options"] = []
+    assert notifier.send_question_card(ask) is False
+
+
+def test_send_question_card_renders_blocks(tmp_path):
+    notifier, paths = _build_notifier(tmp_path)
+    notifier._web.chat_postMessage.return_value = {"ok": True, "ts": "1700000000.000100"}
+    notifier.send_question_card(_SAMPLE_ASK)
+    call = notifier._web.chat_postMessage.call_args
+    blocks = call.kwargs.get("blocks") or []
+    assert blocks[0]["type"] == "header"
+    section_texts = " ".join(
+        b.get("text", {}).get("text", "")
+        for b in blocks if b.get("type") == "section"
+    )
+    assert "큰 파일 처리 분기" in section_texts
+    assert "스트리밍" in section_texts
+    assert "100MB → 0.8s" in section_texts
+    assert "LLM 추천" in section_texts
+    # 각 옵션마다 버튼 1개
+    action_blocks = [b for b in blocks if b.get("type") == "actions"]
+    assert len(action_blocks) == 1
+    elements = action_blocks[0]["elements"]
+    assert {e["action_id"] for e in elements} == {"forge_answer_A", "forge_answer_B"}
+    # value 4-part 구조
+    values = [e["value"] for e in elements]
+    assert all(v.startswith("testproj::answer::abc-123::") for v in values)
+
+
+def test_send_question_card_replies_to_thread(tmp_path):
+    notifier, paths = _build_notifier(tmp_path)
+    notifier._web.chat_postMessage.return_value = {"ok": True, "ts": "1700000000.000100"}
+    notifier.notify("info", "root")
+    notifier._web.chat_postMessage.return_value = {"ok": True, "ts": "1700000001.000200"}
+
+    notifier.send_question_card(_SAMPLE_ASK)
+    second_call = notifier._web.chat_postMessage.call_args_list[1]
+    assert second_call.kwargs.get("thread_ts") == "1700000000.000100"
+
+
+def test_handle_interactive_writes_answer_file(tmp_path):
+    """answer:: 분기 — 사용자 버튼 클릭 시 paths.answer_signal_for(qid)에 option_id 기록."""
+    notifier, paths = _build_notifier(tmp_path)
+    payload = {
+        "actions": [
+            {
+                "action_id": "forge_answer_B",
+                "value": "testproj::answer::abc-123::B",
+            }
+        ]
+    }
+    notifier._handle_interactive(payload)
+
+    answer_file = paths.answer_signal_for("abc-123")
+    assert answer_file.exists()
+    assert answer_file.read_text(encoding="utf-8") == "B"
+
+
+def test_handle_interactive_answer_filters_other_project(tmp_path):
+    """다른 프로젝트의 answer 버튼 클릭은 무시 (멀티 프로젝트 라우팅)."""
+    notifier, paths = _build_notifier(tmp_path)
+    payload = {
+        "actions": [
+            {
+                "action_id": "forge_answer_A",
+                "value": "OTHERPROJ::answer::xyz-999::A",
+            }
+        ]
+    }
+    notifier._handle_interactive(payload)
+    answer_file = paths.answer_signal_for("xyz-999")
+    assert not answer_file.exists()

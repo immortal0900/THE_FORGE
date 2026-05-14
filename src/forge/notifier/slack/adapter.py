@@ -126,6 +126,15 @@ class SlackNotifier(NotifierAdapter):
         except OSError as e:
             logger.warning("Slack thread_ts 저장 실패 (%s): %s", self._paths.slack_thread, e)
 
+    def _save_answer(self, qid: str, option_id: str) -> None:
+        """ASK_USER 응답을 paths.answer_signal_for(qid)에 기록 (큰 그림 1)."""
+        try:
+            target = self._paths.answer_signal_for(qid)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(option_id.strip(), encoding="utf-8")
+        except OSError as e:
+            logger.warning("Slack ASK_USER 응답 저장 실패 (qid=%s): %s", qid, e)
+
     def reset_thread(self) -> None:
         """현재 스레드를 잊고 다음 notify에서 새 root를 만든다.
 
@@ -137,6 +146,138 @@ class SlackNotifier(NotifierAdapter):
             self._paths.slack_thread.unlink(missing_ok=True)
         except OSError:
             pass
+
+    # ── 큰 그림 1: ASK_USER 옵션 카드 ────────────────────────────────────
+
+    def send_question_card(
+        self,
+        ask: dict,
+        *,
+        project_name: str = "",
+    ) -> bool:
+        """LLM의 ASK_USER JSON을 Slack Block Kit 옵션 카드로 thread에 reply.
+
+        ask 스키마 (scaffold/agents/planner.md 명세, plan 큰 그림 1):
+            {"type":"ask_user", "qid":..., "axiom_link":...,
+             "situation":..., "options":[{id,label,icon,mechanism,
+             expected_metric,side_effect,similar_case}, ...],
+             "recommend":..., "recommend_basis":...}
+
+        버튼 클릭 시 receiver가 paths.answer_signal_for(qid) 파일에
+        option_id를 기록 → orchestrator on_question 콜백이 폴링.
+        """
+        if not self.enabled or self._web is None:
+            return False
+
+        qid = ask.get("qid", "")
+        axiom_link = ask.get("axiom_link") or ""
+        situation = ask.get("situation", "")
+        options = ask.get("options", []) or []
+        recommend = ask.get("recommend", "")
+        basis = ask.get("recommend_basis", "")
+
+        if not qid or not options:
+            return False
+
+        header_text = "📍 결정 요청"
+        if axiom_link:
+            header_text += f"   |   axiom {axiom_link}"
+
+        blocks: list[dict] = [
+            {
+                "type": "header",
+                "text": {"type": "plain_text", "text": header_text[:150], "emoji": True},
+            }
+        ]
+        if situation:
+            blocks.append(
+                {
+                    "type": "section",
+                    "text": {"type": "mrkdwn", "text": f"*상황*: {situation}"[:2900]},
+                }
+            )
+        blocks.append({"type": "divider"})
+
+        for opt in options:
+            oid = str(opt.get("id", "?"))
+            icon = opt.get("icon", "")
+            label = opt.get("label", "")
+            lines = [f"{icon} *{oid}*  {label}".strip()]
+            if opt.get("mechanism"):
+                lines.append(f"  • *동작*: {opt['mechanism']}")
+            if opt.get("expected_metric"):
+                lines.append(f"  • *실측 예상*: {opt['expected_metric']}")
+            if opt.get("side_effect"):
+                lines.append(f"  • *부수 효과*: {opt['side_effect']}")
+            if opt.get("similar_case"):
+                lines.append(f"  • *유사 사례*: {opt['similar_case']}")
+            blocks.append(
+                {
+                    "type": "section",
+                    "text": {"type": "mrkdwn", "text": "\n".join(lines)[:2900]},
+                }
+            )
+
+        blocks.append({"type": "divider"})
+
+        if recommend or basis:
+            rec_lines: list[str] = []
+            if recommend:
+                rec_lines.append(f"💡 *LLM 추천*: {recommend}")
+            if basis:
+                rec_lines.append(f"   _왜_: {basis}")
+            blocks.append(
+                {
+                    "type": "section",
+                    "text": {"type": "mrkdwn", "text": "\n".join(rec_lines)[:2900]},
+                }
+            )
+
+        elements: list[dict] = []
+        for opt in options:
+            oid = str(opt.get("id", "?"))
+            icon = opt.get("icon", "")
+            display = f"{icon} {oid}".strip()
+            elements.append(
+                {
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": display[:75], "emoji": True},
+                    "action_id": f"forge_answer_{oid}",
+                    # value: project::answer::qid::option_id (4-part)
+                    "value": f"{self._project_name}::answer::{qid}::{oid}"[:2000],
+                }
+            )
+        if elements:
+            blocks.append({"type": "actions", "elements": elements[:25]})
+
+        display_project = project_name or self._project_name
+        fallback = (
+            f"📍 [{display_project}] 결정 요청 qid={qid} ({len(options)} 옵션)"
+        )
+
+        post_kwargs: dict = {
+            "channel": self._channel,
+            "username": self._display_name,
+            "icon_emoji": self._emoji,
+            "text": fallback[:3000],
+            "blocks": blocks,
+        }
+        if self._thread_ts:
+            post_kwargs["thread_ts"] = self._thread_ts
+
+        try:
+            resp = self._web.chat_postMessage(**post_kwargs)
+        except Exception as e:
+            logger.warning("Slack send_question_card 실패: %s", e)
+            return False
+
+        if not self._thread_ts:
+            root_ts = (resp.get("ts") if hasattr(resp, "get") else None) if resp else None
+            if root_ts:
+                self._thread_ts = root_ts
+                self._save_thread_ts(root_ts)
+
+        return True
 
     # ── 큰 그림 2: Verdict Card 전송 ──────────────────────────────────────
 
@@ -421,6 +562,20 @@ class SlackNotifier(NotifierAdapter):
                     flush=True,
                 )
                 return  # ★ 다른 프로젝트의 이벤트 — 필터 통과시키지 않음
+
+            # 큰 그림 1: ASK_USER 응답 — `answer::<qid>::<option_id>` 형태.
+            # 기존 5개 신호와 충돌 없는 별도 디스패치.
+            if action_raw.startswith("answer::"):
+                parts = action_raw.split("::")
+                if len(parts) >= 3:
+                    qid = parts[1]
+                    option_id = "::".join(parts[2:])  # option_id에 :: 들어가는 경우 보존
+                    self._save_answer(qid, option_id)
+                    print(
+                        f"[Slack]   ✓ ASK_USER 응답 저장 qid={qid} option={option_id}",
+                        flush=True,
+                    )
+                return
 
             action = action_raw.strip().lower()
             print(

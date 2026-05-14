@@ -250,6 +250,63 @@ def _extract_scores_from_qa_report(paths: ProjectPaths) -> dict[str, int]:
 # ── 알림 헬퍼 (v2.3) ───────────────────────────────────────────────────────
 
 
+def _make_on_question(
+    notifier: NotifierAdapter,
+    paths: ProjectPaths,
+    config: ForgeConfig,
+):
+    """큰 그림 1: ASK_USER 콜백 팩토리.
+
+    LLM이 stdout에 `{"type":"ask_user", ...}` JSON을 출력하면 runner가 이 콜백을
+    호출한다. 콜백은:
+      1) Slack 옵션 카드를 thread에 reply로 전송 (SlackNotifier일 때만)
+      2) paths.answer_signal_for(qid) 파일이 생길 때까지 폴링
+      3) 파일 내용(option_id)을 답으로 반환
+
+    토대 1에서는 30분 임시 타임아웃 (응답 없으면 추천안 자동 채택). 큰 그림 1
+    후속 8번 todo (무기한 백그라운드 대기 + 6h heartbeat)에서 본격 무기한 대기.
+    """
+    import asyncio as _asyncio
+
+    async def _on_question(ask: dict) -> str:
+        from .notifier.slack.adapter import SlackNotifier
+
+        qid = (ask.get("qid") or "").strip()
+        fallback = (ask.get("recommend") or "").strip()
+        if not qid:
+            return fallback
+
+        if isinstance(notifier, SlackNotifier):
+            notifier.send_question_card(ask, project_name=paths.project_name)
+        else:
+            console.print(
+                f"[yellow]ASK_USER qid={qid} — Slack notifier 아님, 추천안 '{fallback}' 자동 채택[/yellow]"
+            )
+            return fallback
+
+        answer_file = paths.answer_signal_for(qid)
+        start = time.time()
+        timeout = 1800  # 30분 임시. 토대 8에서 무기한 + heartbeat로 교체.
+        while not answer_file.exists():
+            if paths.stop_signal.exists() or paths.exit_signal.exists():
+                return fallback
+            if time.time() - start > timeout:
+                console.print(
+                    f"[yellow]ASK_USER qid={qid} {timeout}s 타임아웃 — 추천안 '{fallback}' 자동 채택[/yellow]"
+                )
+                return fallback
+            await _asyncio.sleep(2)
+
+        try:
+            answer = answer_file.read_text(encoding="utf-8").strip()
+            answer_file.unlink(missing_ok=True)
+            return answer or fallback
+        except OSError:
+            return fallback
+
+    return _on_question
+
+
 def _try_send_verdict_card(
     notifier: NotifierAdapter,
     paths: ProjectPaths,
@@ -497,18 +554,29 @@ def run_cycle(
             # specs/ 변경 감지를 위해 실행 전 목록 기록
             specs_before = set(paths.specs.glob("*.md")) if paths.specs.exists() else set()
 
+            # 큰 그림 1: ASK_USER 콜백 (planner-spec / planner-contract 자유 질문 가능)
+            on_question_cb = _make_on_question(notifier, paths, config)
+
             with tracer.span("planner") as info:
                 if not paths.spec.exists():
                     if not request:
                         notifier.notify("error", "spec.md가 없고 요청도 없습니다.", project_name=paths.project_name)
                         return 2
                     info["input"] = f"[planner/generate] user_request:\n{request}"
-                    result = pl.run_generate(request, config, paths, essence=essence)
+                    result = pl.run_generate(
+                        request, config, paths,
+                        essence=essence,
+                        on_question=on_question_cb,
+                    )
                     info["stdout"] = result.stdout or ""
                     report_subprocess(result, "planner(generate)", console)
                 else:
                     info["input"] = "[planner/review] reviewing existing spec.md"
-                    result = pl.run_review(config, paths, essence=essence)
+                    result = pl.run_review(
+                        config, paths,
+                        essence=essence,
+                        on_question=on_question_cb,
+                    )
                     info["stdout"] = result.stdout or ""
                     report_subprocess(result, "planner(review)", console)
 
@@ -675,9 +743,15 @@ def run_cycle(
                 )
                 cp.advance(Phase.CONTRACT, f"contract generating (sprint {sprint_num})")
                 cp.save(paths.checkpoint_file)
+                # 큰 그림 1: contract도 sprint 범위 결정 시 ASK_USER 가능
+                sprint_on_question = _make_on_question(notifier, paths, config)
                 with sprint_tracer.span("contract") as info:
                     info["input"] = f"[planner/contract] Sprint {sprint_num} contract generation"
-                    result = pl.run_contract(sprint_num, config, paths, essence=sprint_essence)
+                    result = pl.run_contract(
+                        sprint_num, config, paths,
+                        essence=sprint_essence,
+                        on_question=sprint_on_question,
+                    )
                     info["stdout"] = result.stdout or ""
                     report_subprocess(result, f"planner(contract sprint-{sprint_num})", console)
 

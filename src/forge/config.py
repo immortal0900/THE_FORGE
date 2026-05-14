@@ -193,6 +193,11 @@ class ProjectPaths:
         # 같은 스레드에 reply. 멀티 프로젝트 동시 실행 시 라우팅 단위.
         self.slack_thread = self.artifacts / ".slack-thread"
 
+        # 큰 그림 1: ASK_USER 응답 저장 디렉터리. LLM이 stdout에 ask_user JSON을
+        # 출력하면 orchestrator on_question 콜백이 Slack 옵션 카드 전송 + 사용자가
+        # 버튼 누르면 receiver가 이 폴더에 <qid>.txt 파일 작성 → 콜백이 폴링.
+        self.answers_dir = self.artifacts / ".answers"
+
         self.claude_settings = self.project_root / ".claude" / "settings.json"
         self.claude_md = self.project_root / "CLAUDE.md"
 
@@ -201,9 +206,18 @@ class ProjectPaths:
         return self.project_root.name
 
     def ensure_artifacts(self) -> None:
-        for path in (self.artifacts, self.specs, self.decisions, self.backup):
+        for path in (self.artifacts, self.specs, self.decisions, self.backup, self.answers_dir):
             path.mkdir(parents=True, exist_ok=True)
         self.journal.parent.mkdir(parents=True, exist_ok=True)
+
+    def answer_signal_for(self, qid: str) -> Path:
+        """ASK_USER qid에 대한 사용자 응답 신호 파일 경로 (큰 그림 1).
+
+        Slack 옵션 카드 버튼 클릭 시 receiver가 이 파일에 option_id를 기록 →
+        orchestrator on_question 콜백이 폴링.
+        """
+        safe = re.sub(r"[^A-Za-z0-9_.-]", "_", qid)[:64] or "default"
+        return self.answers_dir / f"{safe}.txt"
 
     def current_sprint(self) -> int:
         """sprint-N-done.md 최대 번호 + 1. 없으면 1."""

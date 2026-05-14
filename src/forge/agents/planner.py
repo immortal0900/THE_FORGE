@@ -22,7 +22,7 @@ from typing import Optional
 
 from ..config import ForgeConfig, ProjectPaths
 from ..judgment import EssenceSource
-from .runner import RunResult, run_agent_sync
+from .runner import AskUserCallback, RunResult, run_agent_sync
 
 
 def _format_essence_for_prompt(essence: EssenceSource) -> str:
@@ -59,10 +59,12 @@ def run_generate(
     config: ForgeConfig,
     paths: ProjectPaths,
     essence: Optional[EssenceSource] = None,
+    on_question: Optional[AskUserCallback] = None,
 ) -> RunResult:
     """모드 A — spec.md 생성.
 
     essence가 제공되면 prompt에 inline 인용. 없으면 사용자 request 그대로.
+    on_question이 있으면 ASK_USER JSON 출력 시 콜백 호출 (큰 그림 1).
     """
     essence_block = _format_essence_for_prompt(essence) + "\n" if essence else ""
     prompt = (
@@ -76,6 +78,7 @@ def run_generate(
         paths.project_root,
         prompt,
         max_turns=config.planner_max_turns,
+        on_question=on_question,
     )
 
 
@@ -83,6 +86,7 @@ def run_review(
     config: ForgeConfig,
     paths: ProjectPaths,
     essence: Optional[EssenceSource] = None,
+    on_question: Optional[AskUserCallback] = None,
 ) -> RunResult:
     """모드 B — 기존 spec.md 검토."""
     essence_block = _format_essence_for_prompt(essence) + "\n" if essence else ""
@@ -99,6 +103,7 @@ def run_review(
         paths.project_root,
         prompt,
         max_turns=config.planner_review_max_turns,
+        on_question=on_question,
     )
 
 
@@ -107,6 +112,7 @@ def run_contract(
     config: ForgeConfig,
     paths: ProjectPaths,
     essence: Optional[EssenceSource] = None,
+    on_question: Optional[AskUserCallback] = None,
 ) -> RunResult:
     """모드 C — Sprint Contract 생성."""
     essence_block = _format_essence_for_prompt(essence) + "\n" if essence else ""
@@ -121,6 +127,7 @@ def run_contract(
         paths.project_root,
         prompt,
         max_turns=config.contract_max_turns,
+        on_question=on_question,
     )
 
 
