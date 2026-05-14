@@ -89,15 +89,26 @@ def run_review(
     essence: Optional[EssenceSource] = None,
     on_question: Optional[AskUserCallback] = None,
 ) -> RunResult:
-    """모드 B — 기존 spec.md 검토."""
+    """모드 B — 기존 spec.md 검토.
+
+    ⚠️ 강제 규칙: stream-json 양방향 모드에서 LLM이 종종 텍스트로만 답하고 Write 도구를
+    호출하지 않는 패턴이 관찰됨. 이를 막기 위해 prompt를 *명령형*으로 강화.
+    """
     essence_block = _format_essence_for_prompt(essence) + "\n" if essence else ""
     prompt = (
         f"{essence_block}"
-        "artifacts/spec.md가 이미 존재한다. **반드시 Mode B(리뷰 모드)로 동작**하라. "
-        "생성 모드로 전환하지 말 것. "
-        "최우선 작업: artifacts/plan-review.md를 작성하라 "
-        "(종합 판정은 READY 또는 NEEDS_REVISION 중 하나). "
-        "plan-review.md 작성 완료 후에만, specs/ 에 누락된 도메인 스펙이 있으면 추가로 보강하라."
+        "# Mode B — 리뷰 모드 (즉시 실행, 텍스트만 답하지 마라)\n\n"
+        "artifacts/spec.md가 이미 존재한다. **반드시 Mode B(리뷰 모드)로 동작**하라.\n\n"
+        "## 필수 규칙 (위반 시 세션 실패)\n"
+        "1. **이 세션은 반드시 Write 도구를 호출하여 artifacts/plan-review.md를 실제로 작성한 뒤 종료해야 한다.** "
+        "텍스트로만 답변하고 Write 없이 끝내는 것은 허용되지 않는다.\n"
+        "2. plan-review.md는 종합 판정 라인 (READY 또는 NEEDS_REVISION 중 하나)을 반드시 포함해야 한다.\n"
+        "3. 사용자 응답(예: `[사용자 의견]` 접두사 메시지)이 있으면 plan-review.md 본문에 "
+        "해당 답변을 명시 섹션 (예: `## 사용자 질문 응답`) 으로 포함해 사용자가 결과를 확인할 수 있게 하라.\n"
+        "4. plan-review.md 작성 완료 후에만, specs/ 에 누락된 도메인 스펙이 있으면 추가로 보강하라.\n\n"
+        "## 실패 모드\n"
+        "Write가 한 번도 호출되지 않고 세션이 종료되면 orchestrator가 plan-review.md 부재를 감지하여 "
+        "사용자에게 경고를 전송한다. 그 상황을 피하려면 **반드시 Write 실행 후 종료**하라."
     )
     return run_agent_sync(
         "planner",
@@ -116,13 +127,22 @@ def run_contract(
     essence: Optional[EssenceSource] = None,
     on_question: Optional[AskUserCallback] = None,
 ) -> RunResult:
-    """모드 C — Sprint Contract 생성."""
+    """모드 C — Sprint Contract 생성.
+
+    ⚠️ Write 도구 강제 규칙은 run_review와 같은 이유로 명령형 prompt.
+    """
     essence_block = _format_essence_for_prompt(essence) + "\n" if essence else ""
     prompt = (
         f"{essence_block}"
-        f"Sprint {sprint_num}의 sprint-contract.md를 생성하라. "
-        f"templates/sprint-contract-template.md 형식을 따르고, "
-        f"spec.md / specs/ / progress-log.md / sprint-*-done.md를 반영하라."
+        f"# Mode C — Sprint {sprint_num} Contract 생성 (즉시 실행, 텍스트만 답하지 마라)\n\n"
+        f"## 필수 규칙 (위반 시 세션 실패)\n"
+        f"1. **이 세션은 반드시 Write 도구를 호출하여 artifacts/sprint-contract.md를 실제로 작성한 뒤 종료해야 한다.** "
+        f"텍스트로만 답변하고 Write 없이 끝내는 것은 허용되지 않는다.\n"
+        f"2. templates/sprint-contract-template.md 형식을 따르라.\n"
+        f"3. spec.md / specs/ / progress-log.md / sprint-*-done.md를 반영하라.\n\n"
+        f"## 실패 모드\n"
+        f"Write 미호출 종료 시 orchestrator가 sprint-contract.md 부재를 감지하여 generator 시작을 막고 "
+        f"사용자에게 경고를 전송한다. 반드시 Write 실행 후 종료하라."
     )
     return run_agent_sync(
         "planner",

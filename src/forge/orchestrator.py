@@ -253,6 +253,34 @@ def _extract_scores_from_qa_report(paths: ProjectPaths) -> dict[str, int]:
 _HEARTBEAT_SECONDS = 6 * 3600   # 6시간
 
 
+def _reply_llm_tail(
+    notifier: NotifierAdapter,
+    paths: ProjectPaths,
+    agent_label: str,
+    stdout: str,
+    *,
+    tail_chars: int = 1500,
+) -> None:
+    """LLM stdout의 마지막 N자를 Slack 스레드 reply로 전송.
+
+    LLM은 직접 Slack에 메시지를 못 보낸다 (notifier는 orchestrator 도구).
+    그래서 사용자가 평문 의견을 던졌을 때 LLM이 stdout에 답을 써도 사용자가
+    못 본다. 이걸 메우려고 매 LLM 라운드 종료 후 stdout 꼬리를 자동 reply.
+
+    너무 길면 노이즈이므로 tail_chars로 제한. 비어있으면 no-op.
+    """
+    if not stdout or not stdout.strip():
+        return
+    tail = stdout.strip()
+    if len(tail) > tail_chars:
+        tail = "...(이전 생략)\n" + tail[-tail_chars:]
+    notifier.notify(
+        "info",
+        f"💭 {agent_label} LLM 응답 (마지막 {min(tail_chars, len(tail))}자):\n```\n{tail}\n```",
+        project_name=paths.project_name,
+    )
+
+
 def _make_on_question(
     notifier: NotifierAdapter,
     paths: ProjectPaths,
@@ -614,6 +642,7 @@ def run_cycle(
                     )
                     info["stdout"] = result.stdout or ""
                     report_subprocess(result, "planner(generate)", console)
+                    _reply_llm_tail(notifier, paths, "planner(generate)", result.stdout)
                 else:
                     info["input"] = "[planner/review] reviewing existing spec.md"
                     result = pl.run_review(
@@ -623,6 +652,17 @@ def run_cycle(
                     )
                     info["stdout"] = result.stdout or ""
                     report_subprocess(result, "planner(review)", console)
+                    _reply_llm_tail(notifier, paths, "planner(review)", result.stdout)
+
+            # plan-review.md 미생성 명시 경고 (silent fallback 금지)
+            if not paths.plan_review.exists():
+                notifier.notify(
+                    "warning",
+                    "⚠ planner LLM이 plan-review.md를 작성하지 않고 종료했습니다. "
+                    "위 LLM 응답을 참고해 사용자가 직접 수동 작성하거나, "
+                    "더 명시적인 지시로 /revise를 누르거나, /resume으로 진행하세요.",
+                    project_name=paths.project_name,
+                )
 
             # 토대 3: planner 종료 후 spec.md frontmatter에 essence 인용 (있을 때만).
             if essence and paths.spec.exists():
@@ -798,6 +838,17 @@ def run_cycle(
                     )
                     info["stdout"] = result.stdout or ""
                     report_subprocess(result, f"planner(contract sprint-{sprint_num})", console)
+                    _reply_llm_tail(notifier, paths, f"contract sprint-{sprint_num}", result.stdout)
+
+                # sprint-contract.md 미생성 명시 경고 (silent fallback 금지)
+                if not paths.sprint_contract.exists():
+                    notifier.notify(
+                        "warning",
+                        "⚠ contract LLM이 sprint-contract.md를 작성하지 않고 종료. "
+                        "generator가 이대로 진행하면 contract를 못 읽고 멈춥니다. "
+                        "/revise로 명시 지시 후 재시도 권장.",
+                        project_name=paths.project_name,
+                    )
 
                 # 첫 Sprint Contract만 승인 대기. revise 요청 시 Mode D로 되돌려 spec 수정 가능
                 if sprint_num == 1:
@@ -928,6 +979,7 @@ def run_cycle(
                         )
                         info["stdout"] = result.stdout or ""
                         report_subprocess(result, f"generator sprint-{sprint_num}", console)
+                        _reply_llm_tail(notifier, paths, f"generator sprint-{sprint_num}", result.stdout)
                     except KeyboardInterrupt:
                         pass
                     except FileNotFoundError:
