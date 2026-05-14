@@ -79,6 +79,7 @@ def run_generate(
         prompt,
         max_turns=config.planner_max_turns,
         on_question=on_question,
+        whisper_queue_path=paths.whisper_queue,
     )
 
 
@@ -104,6 +105,7 @@ def run_review(
         prompt,
         max_turns=config.planner_review_max_turns,
         on_question=on_question,
+        whisper_queue_path=paths.whisper_queue,
     )
 
 
@@ -128,6 +130,7 @@ def run_contract(
         prompt,
         max_turns=config.contract_max_turns,
         on_question=on_question,
+        whisper_queue_path=paths.whisper_queue,
     )
 
 

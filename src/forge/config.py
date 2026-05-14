@@ -198,6 +198,11 @@ class ProjectPaths:
         # 버튼 누르면 receiver가 이 폴더에 <qid>.txt 파일 작성 → 콜백이 폴링.
         self.answers_dir = self.artifacts / ".answers"
 
+        # 큰 그림 3 나머지: 사용자가 Slack 스레드에 평문 메시지를 보내면 receiver가
+        # 이 JSONL 파일에 한 줄씩 append. runner의 whisper poller가 매 LLM turn
+        # 사이마다 새 라인을 읽어 LLM stdin에 "[사용자 의견] ..." user message로 push.
+        self.whisper_queue = self.artifacts / ".whisper-queue.jsonl"
+
         self.claude_settings = self.project_root / ".claude" / "settings.json"
         self.claude_md = self.project_root / "CLAUDE.md"
 

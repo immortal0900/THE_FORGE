@@ -531,6 +531,57 @@ class SlackNotifier(NotifierAdapter):
             self._handle_interactive(req.payload)
         elif req.type == "slash_commands":
             self._handle_slash_command(req.payload)
+        elif req.type == "events_api":
+            self._handle_event(req.payload)
+
+    def _handle_event(self, payload: dict) -> None:
+        """Events API: 스레드 안 평문 메시지를 whisper queue에 적재 (큰 그림 3 나머지).
+
+        조건:
+        - event.type == "message"
+        - event.thread_ts == self._thread_ts (우리 프로젝트의 스레드)
+        - bot 자체 메시지 아님 (bot_id 없음)
+        - subtype 없음 (말풍선 평문)
+        """
+        try:
+            event = payload.get("event", {})
+            if event.get("type") != "message":
+                return
+            thread_ts = event.get("thread_ts")
+            if not thread_ts or thread_ts != self._thread_ts:
+                return
+            if event.get("bot_id") or event.get("subtype"):
+                return
+            text = (event.get("text") or "").strip()
+            if not text:
+                return
+            self._append_whisper(text)
+            print(
+                f"[Slack]   💬 whisper 수신 (project='{self._project_name}', "
+                f"len={len(text)}): {text[:60]}...",
+                flush=True,
+            )
+        except Exception as e:
+            logger.warning("Slack event 처리 실패: %s", e, exc_info=True)
+
+    def _append_whisper(self, text: str) -> None:
+        """사용자 평문 의견을 paths.whisper_queue JSONL에 한 줄 append.
+
+        runner의 whisper poller가 매 LLM turn 사이마다 새 라인을 읽고 stdin push.
+        """
+        import json
+        from datetime import datetime
+
+        record = {
+            "at": datetime.now().isoformat(timespec="seconds"),
+            "text": text,
+        }
+        try:
+            self._paths.whisper_queue.parent.mkdir(parents=True, exist_ok=True)
+            with self._paths.whisper_queue.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+        except OSError as e:
+            logger.warning("Slack whisper 적재 실패: %s", e)
 
     def _handle_interactive(self, payload: dict) -> None:
         try:

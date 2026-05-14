@@ -908,6 +908,7 @@ def run_cycle(
                             initial_prompt,
                             max_turns=config.generator_max_turns,
                             on_question=generator_on_question,
+                            whisper_queue_path=paths.whisper_queue,
                         )
                         info["stdout"] = result.stdout or ""
                         report_subprocess(result, f"generator sprint-{sprint_num}", console)

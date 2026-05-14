@@ -47,12 +47,27 @@ class ForgeAgentRunner:
         session: ClaudeCliSession,
         *,
         on_question: Optional[AskUserCallback] = None,
+        whisper_queue_path: Optional[Path] = None,
     ) -> None:
         self.session = session
         self.on_question = on_question
+        self.whisper_queue_path = whisper_queue_path
+        self._whisper_cursor = 0   # 이미 push 한 라인 수
 
     async def run(self, initial_prompt: str) -> RunResult:
         await self.session.start()
+
+        # 큰 그림 3 나머지: 시작 직전 whisper queue 위치 초기화 (이전 sprint 잔여 무시).
+        if self.whisper_queue_path and self.whisper_queue_path.exists():
+            try:
+                self._whisper_cursor = sum(
+                    1 for _ in self.whisper_queue_path.open(
+                        "r", encoding="utf-8", errors="replace"
+                    )
+                )
+            except OSError:
+                self._whisper_cursor = 0
+
         await self.session.send_user_message(initial_prompt)
 
         events: list[SessionEvent] = []
@@ -60,6 +75,9 @@ class ForgeAgentRunner:
         error_payload = ""
 
         async for ev in self.session.iter_events():
+            # 매 이벤트 사이마다 사용자 whisper 큐 확인 → LLM stdin에 push
+            await self._drain_whispers()
+
             events.append(ev)
 
             if ev.type == "assistant":
@@ -94,6 +112,41 @@ class ForgeAgentRunner:
             session_id=self.session.session_id,
             events=events,
         )
+
+    async def _drain_whispers(self) -> None:
+        """whisper_queue JSONL의 새 라인을 LLM stdin에 user message로 push.
+
+        Slack receiver(_append_whisper)가 사용자 평문 메시지를 한 줄씩 append.
+        runner는 _whisper_cursor 이후의 새 라인만 읽어 LLM에 전달 (중복 push 방지).
+        """
+        if self.whisper_queue_path is None or not self.whisper_queue_path.exists():
+            return
+        try:
+            lines = self.whisper_queue_path.read_text(
+                encoding="utf-8", errors="replace"
+            ).splitlines()
+        except OSError:
+            return
+        if len(lines) <= self._whisper_cursor:
+            return
+        new_lines = lines[self._whisper_cursor:]
+        self._whisper_cursor = len(lines)
+        for raw in new_lines:
+            raw = raw.strip()
+            if not raw:
+                continue
+            try:
+                record = json.loads(raw)
+                text = (record.get("text") or "").strip()
+            except json.JSONDecodeError:
+                text = raw
+            if not text:
+                continue
+            try:
+                await self.session.send_user_message(f"[사용자 의견] {text}")
+            except Exception:
+                # 세션이 이미 종료됐을 수 있음 — 조용히 무시
+                return
 
     @staticmethod
     def _extract_assistant_text(event_data: dict) -> str:
@@ -143,10 +196,12 @@ def run_agent_sync(
     session_id: Optional[str] = None,
     resume: bool = False,
     on_question: Optional[AskUserCallback] = None,
+    whisper_queue_path: Optional[Path] = None,
 ) -> RunResult:
     """동기 호출자(planner.py / evaluator.py / orchestrator.py)용 진입점.
 
     내부에서 asyncio.run으로 영속 Popen + streaming 처리.
+    whisper_queue_path가 주어지면 사용자 평문 의견을 LLM에 자동 push (큰 그림 3).
     """
     session = ClaudeCliSession(
         agent=agent,
@@ -155,5 +210,9 @@ def run_agent_sync(
         resume=resume,
         max_turns=max_turns,
     )
-    runner = ForgeAgentRunner(session, on_question=on_question)
+    runner = ForgeAgentRunner(
+        session,
+        on_question=on_question,
+        whisper_queue_path=whisper_queue_path,
+    )
     return asyncio.run(runner.run(initial_prompt))

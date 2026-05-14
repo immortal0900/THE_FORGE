@@ -391,3 +391,110 @@ async def test_on_question_fallback_when_no_qid(tmp_path):
     cb = _make_on_question(notifier, paths, notifier._config)
     answer = await cb({"qid": "", "options": [{"id": "A"}], "recommend": "A"})
     assert answer == "A"
+
+
+# ── 큰 그림 3 나머지: 스레드 평문 → whisper queue ───────────────────────────
+
+
+def test_handle_event_ignores_non_thread_messages(tmp_path):
+    notifier, paths = _build_notifier(tmp_path)
+    notifier._thread_ts = "1700.000"
+    # 다른 스레드의 message
+    payload = {
+        "event": {
+            "type": "message",
+            "thread_ts": "9999.999",
+            "text": "다른 스레드 메시지",
+        }
+    }
+    notifier._handle_event(payload)
+    assert not paths.whisper_queue.exists()
+
+
+def test_handle_event_ignores_bot_message(tmp_path):
+    notifier, paths = _build_notifier(tmp_path)
+    notifier._thread_ts = "1700.000"
+    payload = {
+        "event": {
+            "type": "message",
+            "thread_ts": "1700.000",
+            "bot_id": "B123",
+            "text": "봇 자기 메시지",
+        }
+    }
+    notifier._handle_event(payload)
+    assert not paths.whisper_queue.exists()
+
+
+def test_handle_event_appends_thread_text_to_whisper_queue(tmp_path):
+    notifier, paths = _build_notifier(tmp_path)
+    notifier._thread_ts = "1700.000"
+    payload = {
+        "event": {
+            "type": "message",
+            "thread_ts": "1700.000",
+            "text": "generator 너무 길다 a3 무시해라",
+        }
+    }
+    notifier._handle_event(payload)
+    assert paths.whisper_queue.exists()
+    import json as _json
+
+    lines = paths.whisper_queue.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1
+    record = _json.loads(lines[0])
+    assert record["text"] == "generator 너무 길다 a3 무시해라"
+    assert record["at"]
+
+
+def test_handle_event_appends_multiple_messages(tmp_path):
+    notifier, paths = _build_notifier(tmp_path)
+    notifier._thread_ts = "1700.000"
+    for text in ("첫 의견", "둘째 의견", "셋째 의견"):
+        notifier._handle_event(
+            {"event": {"type": "message", "thread_ts": "1700.000", "text": text}}
+        )
+    lines = paths.whisper_queue.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 3
+
+
+@pytest.mark.asyncio
+async def test_runner_drain_whispers_pushes_to_session(tmp_path):
+    """ForgeAgentRunner._drain_whispers 가 새 라인을 LLM stdin user message로 push."""
+    import json as _json
+
+    from forge.agents.runner import ForgeAgentRunner
+
+    queue = tmp_path / "whisper.jsonl"
+    queue.write_text(
+        _json.dumps({"at": "2026-05-15T00:00:00", "text": "첫 의견"}) + "\n",
+        encoding="utf-8",
+    )
+
+    session_mock = MagicMock()
+    # send_user_message 는 async — AsyncMock 흉내
+    async def _async_send(text):
+        session_mock._sent.append(text)
+
+    session_mock._sent = []
+    session_mock.send_user_message = _async_send
+
+    runner = ForgeAgentRunner(session_mock, whisper_queue_path=queue)
+    # _whisper_cursor 0에서 시작 → 첫 라인 push
+    await runner._drain_whispers()
+    assert session_mock._sent == ["[사용자 의견] 첫 의견"]
+
+    # 두 번째 drain은 새 라인 없으면 no-op
+    await runner._drain_whispers()
+    assert session_mock._sent == ["[사용자 의견] 첫 의견"]
+
+    # 새 라인 추가하면 다음 drain에서 push
+    with queue.open("a", encoding="utf-8") as fh:
+        fh.write(
+            _json.dumps({"at": "2026-05-15T00:01:00", "text": "둘째 의견"}) + "\n"
+        )
+    await runner._drain_whispers()
+    assert session_mock._sent == [
+        "[사용자 의견] 첫 의견",
+        "[사용자 의견] 둘째 의견",
+    ]
