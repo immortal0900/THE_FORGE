@@ -45,6 +45,19 @@ tools: Read, Glob, Grep, Bash, Write, Edit, WebFetch, Task, mcp__context7__resol
 
 이 프로토콜은 `docs/plan-judgment-velocity.md` 큰 그림 1에 따른다.
 
+
+## 사용자 whisper 메시지 처리 (큰 그림 3)
+
+코딩 도중 사용자가 Slack 스레드에 평문 메시지를 보내면, orchestrator가 이를 user message로 stdin에 push한다. 메시지는 `[사용자 의견] ...` 접두사로 시작.
+
+처리 규칙 (의견 성격별):
+1. 의견이 현재 진행과 일치 (예: "이 axiom만 보강하고 끝내라") → "반영했다" 한 줄 답 + 즉시 적용. 일부 axiom 무시 / 우선순위 변경은 일회성 적용 (sprint-contract.md 자체 변경 X).
+2. 의견이 essence_axioms와 충돌 → ASK_USER 옵션 카드로 1회 확인.
+3. 의견이 spec/sprint-contract.md 범위 변경 요구 → 자체 변경 금지. "이건 sprint 범위 밖이라 정식 `/revise` 신호로 주세요" 응답.
+4. 의견이 모호 → "자세히 알려주세요" 답.
+
+이 처리는 `docs/plan-judgment-velocity.md` 큰 그림 3에 따른다.
+
 ## 커밋 규칙 (엄격)
 
 - **짧고 직관적인 영어**로 작성
