@@ -138,6 +138,78 @@ class SlackNotifier(NotifierAdapter):
         except OSError:
             pass
 
+    # ── 큰 그림 2: Verdict Card 전송 ──────────────────────────────────────
+
+    def send_verdict_card(
+        self,
+        qa_report_path: Path,
+        *,
+        recommendation: str = "",
+        recommendation_reason: str = "",
+        cost_estimate: str = "",
+        buttons: Optional[list[list[str]]] = None,
+        project_name: str = "",
+    ) -> bool:
+        """qa-report.md의 Axiom Verdicts 표를 Slack Verdict Card로 렌더.
+
+        반환: 카드 전송 성공 시 True. qa-report에 axiom verdict가 없거나
+        Slack 비활성 상태면 False (호출자는 기존 notify로 폴백).
+        """
+        if not self.enabled or self._web is None:
+            return False
+
+        from ...judgment import build_verdict_card_blocks, parse_qa_axiom_verdicts
+
+        verdicts = parse_qa_axiom_verdicts(qa_report_path)
+        if not verdicts:
+            return False
+
+        card_blocks = build_verdict_card_blocks(
+            verdicts,
+            recommendation=recommendation,
+            recommendation_reason=recommendation_reason,
+            cost_estimate=cost_estimate,
+        )
+        if not card_blocks:
+            return False
+
+        if buttons:
+            # 기존 _build_blocks가 만든 actions block만 떼서 카드 하단에 붙임
+            tmp = self._build_blocks("", "", buttons, self._project_name)
+            for b in tmp:
+                if b.get("type") == "actions":
+                    card_blocks.append(b)
+                    break
+
+        display_project = project_name or self._project_name
+        fallback_text = (
+            f"📋 [{display_project}] Verdict Card ({len(verdicts)} axioms)"
+        )
+
+        post_kwargs: dict = {
+            "channel": self._channel,
+            "username": self._display_name,
+            "icon_emoji": self._emoji,
+            "text": fallback_text[:3000],
+            "blocks": card_blocks,
+        }
+        if self._thread_ts:
+            post_kwargs["thread_ts"] = self._thread_ts
+
+        try:
+            resp = self._web.chat_postMessage(**post_kwargs)
+        except Exception as e:
+            logger.warning("Slack send_verdict_card 실패: %s", e)
+            return False
+
+        if not self._thread_ts:
+            root_ts = (resp.get("ts") if hasattr(resp, "get") else None) if resp else None
+            if root_ts:
+                self._thread_ts = root_ts
+                self._save_thread_ts(root_ts)
+
+        return True
+
     @property
     def enabled(self) -> bool:
         return self._config.slack_enabled

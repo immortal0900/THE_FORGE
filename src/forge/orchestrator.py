@@ -250,6 +250,35 @@ def _extract_scores_from_qa_report(paths: ProjectPaths) -> dict[str, int]:
 # ── 알림 헬퍼 (v2.3) ───────────────────────────────────────────────────────
 
 
+def _try_send_verdict_card(
+    notifier: NotifierAdapter,
+    paths: ProjectPaths,
+    *,
+    recommendation: str = "",
+    recommendation_reason: str = "",
+    cost_estimate: str = "",
+    buttons: Optional[list[list[str]]] = None,
+) -> None:
+    """큰 그림 2: Slack notifier일 때만 Verdict Card를 thread에 reply로 첨부.
+
+    qa-report.md에 Axiom Verdicts 표가 없으면 자체 no-op (False 반환).
+    Telegram 등 다른 notifier는 기존 첨부 폴백 그대로.
+    """
+    # 함수 지역 import로 순환 / hook 제거 우회
+    from .notifier.slack.adapter import SlackNotifier
+
+    if not isinstance(notifier, SlackNotifier):
+        return
+    notifier.send_verdict_card(
+        paths.qa_report,
+        recommendation=recommendation,
+        recommendation_reason=recommendation_reason,
+        cost_estimate=cost_estimate,
+        buttons=buttons,
+        project_name=paths.project_name,
+    )
+
+
 def _notify_pass_with_next(
     notifier: NotifierAdapter,
     tracer: SprintTracer,
@@ -301,6 +330,15 @@ def _notify_pass_with_next(
         file_path=paths.qa_report, project_name=paths.project_name,
         buttons=[["/resume", "/stop"], ["/status"]],
     )
+    # 큰 그림 2: Axiom Verdicts 표가 있으면 Verdict Card도 thread에 reply.
+    _try_send_verdict_card(
+        notifier,
+        paths,
+        recommendation="PASS — 다음 sprint 진행",
+        recommendation_reason="모든 axiom verdict 통과 (또는 critical PARTIAL 없음)",
+        cost_estimate=f"이번 sprint {dur:.0f}분 / 누적 {total_mins:.0f}분",
+        buttons=[["/resume", "/stop"], ["/status"]],
+    )
 
 
 def _notify_fail_with_options(
@@ -339,6 +377,15 @@ def _notify_fail_with_options(
     notifier.notify(
         "qa_fail", msg,
         file_path=paths.qa_report, project_name=paths.project_name,
+        buttons=[["/resume", "/eval"], ["/skip", "/stop"]],
+    )
+    # 큰 그림 2: Axiom Verdicts 표가 있으면 어느 axiom이 깨졌는지 카드로 노출.
+    _try_send_verdict_card(
+        notifier,
+        paths,
+        recommendation="FAIL — 위 axiom 행의 recommend_action 참고",
+        recommendation_reason="critical axiom PARTIAL/MISSING 또는 점수 미달",
+        cost_estimate=f"이번 sprint {dur:.0f}분 / 누적 {total_mins:.0f}분",
         buttons=[["/resume", "/eval"], ["/skip", "/stop"]],
     )
 

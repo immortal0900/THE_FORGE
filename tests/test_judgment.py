@@ -288,3 +288,165 @@ def test_load_essence_for_project_with_hint(tmp_path):
     essence = load_essence_for_project(tmp_path, hint_path="my-axioms.yaml")
     assert essence is not None
     assert essence.axioms[0].id == "a1"
+
+
+# ── parse_qa_axiom_verdicts (큰 그림 2) ─────────────────────────────────────
+
+
+from forge.judgment import (  # noqa: E402
+    AxiomVerdict,
+    build_verdict_card_blocks,
+    parse_qa_axiom_verdicts,
+)
+
+
+def test_parse_qa_verdicts_empty_when_section_missing(tmp_path):
+    qa = tmp_path / "qa-report.md"
+    qa.write_text("## 종합 판정: PASS\n## 점수: 기능 8/10\n", encoding="utf-8")
+    assert parse_qa_axiom_verdicts(qa) == []
+
+
+def test_parse_qa_verdicts_returns_empty_for_missing_file(tmp_path):
+    assert parse_qa_axiom_verdicts(tmp_path / "absent.md") == []
+
+
+def test_parse_qa_verdicts_basic_table(tmp_path):
+    qa = tmp_path / "qa-report.md"
+    qa.write_text(
+        "## 종합 판정: PASS\n\n"
+        "## Axiom Verdicts\n\n"
+        "| id | statement | verdict | confidence | inspection_method | measurements | evidence | counter_hypothesis | user_impact | recommend_action |\n"
+        "|----|-----------|---------|------------|-------------------|--------------|----------|--------------------|--------------|------------------|\n"
+        "| a1 | 오프라인 동작 | VERIFIED | 95 | 네트워크 차단 | 12/12 통과 | src/net.py:42 | 없음 | 모든 사용자 | accept |\n"
+        "| a2 | 1초 내 처리 | PARTIAL | 60 | 10MB/100MB | 10MB→0.3s | tests/perf:34 | 선형이면 3s | 30% 사용자 | partial_regen(a2) |\n"
+        "\n"
+        "## 다음 섹션\n",
+        encoding="utf-8",
+    )
+    verdicts = parse_qa_axiom_verdicts(qa)
+    assert len(verdicts) == 2
+    assert verdicts[0].id == "a1"
+    assert verdicts[0].verdict == "VERIFIED"
+    assert verdicts[0].confidence == 95
+    assert verdicts[0].counter_hypothesis == "없음"
+    assert verdicts[1].id == "a2"
+    assert verdicts[1].verdict == "PARTIAL"
+    assert verdicts[1].confidence == 60
+    assert verdicts[1].recommend_action == "partial_regen(a2)"
+
+
+def test_parse_qa_verdicts_ignores_separator_and_header(tmp_path):
+    """`|---|` 구분선과 헤더 행은 axiom으로 잘못 포함되면 안 됨."""
+    qa = tmp_path / "qa-report.md"
+    qa.write_text(
+        "## Axiom Verdicts\n\n"
+        "| id | statement | verdict | confidence | im | meas | ev | ch | ui | rec |\n"
+        "|----|-----------|---------|------------|-----|------|----|----|-----|-----|\n"
+        "| a1 | s | VERIFIED | 90 | im | meas | ev | 없음 | ui | accept |\n",
+        encoding="utf-8",
+    )
+    verdicts = parse_qa_axiom_verdicts(qa)
+    assert len(verdicts) == 1
+
+
+def test_parse_qa_verdicts_percent_in_confidence(tmp_path):
+    """`95%` 같은 표기도 정수로 추출."""
+    qa = tmp_path / "qa-report.md"
+    qa.write_text(
+        "## Axiom Verdicts\n\n"
+        "| id | s | v | c | im | meas | ev | ch | ui | rec |\n"
+        "|----|---|---|---|-----|------|----|----|-----|-----|\n"
+        "| a1 | s | VERIFIED | 95% | im | meas | ev | 없음 | ui | accept |\n",
+        encoding="utf-8",
+    )
+    verdicts = parse_qa_axiom_verdicts(qa)
+    assert verdicts[0].confidence == 95
+
+
+# ── build_verdict_card_blocks ───────────────────────────────────────────────
+
+
+def _v(id_: str, verdict: str, conf: int, **extras) -> AxiomVerdict:
+    return AxiomVerdict(
+        id=id_,
+        statement=extras.get("statement", "s"),
+        verdict=verdict,
+        confidence=conf,
+        inspection_method=extras.get("inspection_method", ""),
+        measurements=extras.get("measurements", ""),
+        evidence=extras.get("evidence", ""),
+        counter_hypothesis=extras.get("counter_hypothesis", ""),
+        user_impact=extras.get("user_impact", ""),
+        recommend_action=extras.get("recommend_action", ""),
+    )
+
+
+def test_build_card_blocks_empty_when_no_verdicts():
+    assert build_verdict_card_blocks([]) == []
+
+
+def test_build_card_blocks_header_shows_count_and_icons():
+    blocks = build_verdict_card_blocks(
+        [
+            _v("a1", "VERIFIED", 95),
+            _v("a2", "PARTIAL", 60),
+            _v("a3", "VERIFIED", 98),
+            _v("a4", "MISSING", 0),
+        ]
+    )
+    header = blocks[0]
+    assert header["type"] == "header"
+    text = header["text"]["text"]
+    assert "✅✅⚠️❌" in text or "✅⚠️✅❌" in text  # 순서 = verdicts 입력 순서
+    assert "2/4" in text  # VERIFIED 카운트
+
+
+def test_build_card_blocks_renders_axiom_sections():
+    blocks = build_verdict_card_blocks(
+        [
+            _v(
+                "a2",
+                "PARTIAL",
+                60,
+                statement="1초 내 처리",
+                inspection_method="10MB/100MB 측정",
+                measurements="10MB OK",
+                evidence="tests/perf:34",
+                counter_hypothesis="선형이면 3s",
+                user_impact="30% 사용자",
+                recommend_action="partial_regen(a2)",
+            )
+        ]
+    )
+    section_texts = [
+        b["text"]["text"] for b in blocks if b.get("type") == "section"
+    ]
+    assert any("a2" in t and "60%" in t for t in section_texts)
+    assert any("선형이면 3s" in t for t in section_texts)
+    assert any("partial_regen(a2)" in t for t in section_texts)
+
+
+def test_build_card_blocks_counter_hypothesis_says_none_explicitly():
+    """반박 없으면 '없음' 명시 (silent 금지)."""
+    blocks = build_verdict_card_blocks(
+        [_v("a1", "VERIFIED", 95, counter_hypothesis="")]
+    )
+    section_texts = [
+        b["text"]["text"] for b in blocks if b.get("type") == "section"
+    ]
+    assert any("반박" in t and "없음" in t for t in section_texts)
+
+
+def test_build_card_blocks_includes_recommendation_block():
+    blocks = build_verdict_card_blocks(
+        [_v("a1", "PARTIAL", 60)],
+        recommendation="a1만 부분 재실행",
+        recommendation_reason="신뢰도 60→90 회복 예상",
+        cost_estimate="+12분",
+    )
+    # 마지막 section block에 추천 텍스트
+    sections = [b for b in blocks if b.get("type") == "section"]
+    last = sections[-1]["text"]["text"]
+    assert "a1만 부분 재실행" in last
+    assert "신뢰도 60→90 회복 예상" in last
+    assert "+12분" in last

@@ -132,3 +132,86 @@ def test_load_thread_ts_handles_corrupted_file(tmp_path):
     config = ForgeConfig(slack_bot_token="x", slack_app_token="y", slack_channel="C")
     notifier = SlackNotifier(config, paths)
     assert notifier._thread_ts is None
+
+
+# ── 큰 그림 2: send_verdict_card ────────────────────────────────────────────
+
+
+_VERDICT_TABLE = (
+    "## Axiom Verdicts\n\n"
+    "| id | statement | verdict | confidence | im | meas | ev | ch | ui | rec |\n"
+    "|----|-----------|---------|------------|-----|------|----|----|-----|-----|\n"
+    "| a1 | 본질1 | VERIFIED | 95 | im1 | m1 | e1 | 없음 | u1 | accept |\n"
+    "| a2 | 본질2 | PARTIAL | 60 | im2 | m2 | e2 | 위협 | u2 | partial_regen(a2) |\n"
+)
+
+
+def test_send_verdict_card_returns_false_when_no_verdicts(tmp_path):
+    notifier, paths = _build_notifier(tmp_path)
+    qa = paths.qa_report
+    qa.write_text("## 종합 판정: PASS\n", encoding="utf-8")
+    result = notifier.send_verdict_card(qa)
+    assert result is False
+    notifier._web.chat_postMessage.assert_not_called()
+
+
+def test_send_verdict_card_sends_blocks_with_verdicts(tmp_path):
+    notifier, paths = _build_notifier(tmp_path)
+    notifier._web.chat_postMessage.return_value = {"ok": True, "ts": "1700000000.000100"}
+    qa = paths.qa_report
+    qa.write_text(_VERDICT_TABLE, encoding="utf-8")
+
+    result = notifier.send_verdict_card(
+        qa,
+        recommendation="a2만 부분 재실행",
+        recommendation_reason="신뢰도 60→90 회복",
+        cost_estimate="+12분",
+    )
+    assert result is True
+    call = notifier._web.chat_postMessage.call_args
+    blocks = call.kwargs.get("blocks") or []
+    # header + divider + 2 axiom sections + divider + recommendation = 6+
+    assert len(blocks) >= 5
+    assert blocks[0]["type"] == "header"
+    # 카드 텍스트에 axiom id가 들어있는지
+    section_texts = " ".join(
+        b.get("text", {}).get("text", "")
+        for b in blocks if b.get("type") == "section"
+    )
+    assert "a1" in section_texts
+    assert "a2" in section_texts
+    assert "a2만 부분 재실행" in section_texts
+    assert "+12분" in section_texts
+
+
+def test_send_verdict_card_replies_to_existing_thread(tmp_path):
+    notifier, paths = _build_notifier(tmp_path)
+    # 미리 root 메시지 1개로 thread 형성
+    notifier._web.chat_postMessage.return_value = {"ok": True, "ts": "1700000000.000100"}
+    notifier.notify("info", "root")
+
+    qa = paths.qa_report
+    qa.write_text(_VERDICT_TABLE, encoding="utf-8")
+    notifier._web.chat_postMessage.return_value = {"ok": True, "ts": "1700000001.000200"}
+    notifier.send_verdict_card(qa)
+
+    second_call = notifier._web.chat_postMessage.call_args_list[1]
+    assert second_call.kwargs.get("thread_ts") == "1700000000.000100"
+
+
+def test_send_verdict_card_attaches_buttons(tmp_path):
+    notifier, paths = _build_notifier(tmp_path)
+    notifier._web.chat_postMessage.return_value = {"ok": True, "ts": "1700000000.000100"}
+    qa = paths.qa_report
+    qa.write_text(_VERDICT_TABLE, encoding="utf-8")
+    notifier.send_verdict_card(qa, buttons=[["/resume", "/revise"], ["/exit"]])
+
+    call = notifier._web.chat_postMessage.call_args
+    blocks = call.kwargs.get("blocks") or []
+    action_blocks = [b for b in blocks if b.get("type") == "actions"]
+    assert len(action_blocks) == 1
+    elements = action_blocks[0].get("elements", [])
+    action_ids = {e.get("action_id") for e in elements}
+    assert "forge_resume" in action_ids
+    assert "forge_revise" in action_ids
+    assert "forge_exit" in action_ids
