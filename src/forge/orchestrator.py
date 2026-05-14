@@ -574,6 +574,22 @@ def run_cycle(
                     f"[cyan]essence 로드: {essence.source} ({len(essence.axioms)} axioms)[/cyan]"
                 )
 
+            # 큰 그림 3 일부 보강: planner 작업 시작 *전에* thread root를 먼저 박는다.
+            # 이렇게 해야 planner가 작업하는 동안에도 사용자가 스레드에 평문 의견
+             # (whisper) 을 보낼 수 있고, handle_event가 thread_ts 매칭으로 적재 가능.
+            # 첫 notify가 root가 되므로 이 한 줄이 thread_ts를 만들어준다.
+            essence_note = (
+                f"essence: {len(essence.axioms)} axioms 로드됨"
+                if essence else "essence: 없음 (사용자 요청만 보고 진행)"
+            )
+            notifier.notify(
+                "info",
+                f"🧵 [{paths.project_name}] forge run 시작 — planner 작업 중...\n"
+                f"{essence_note}\n"
+                f"이 스레드에 평문 메시지를 보내면 LLM이 다음 turn에 자동 반영합니다.",
+                project_name=paths.project_name,
+            )
+
             sprint_num = paths.current_sprint()
             tracer = SprintTracer(config, sprint_num, paths.project_name, paths.cost_log)
             _active_tracers.append(tracer)
