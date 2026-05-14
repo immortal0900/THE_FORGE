@@ -1,61 +1,42 @@
-"""Planner 에이전트 — claude -p --agent planner subprocess 래퍼."""
+"""Planner 에이전트 — 영속 Popen 세션 호출 wrapper.
+
+토대 1 (docs/plan-judgment-velocity.md): subprocess.run batch → 영속 Popen +
+stream-json 양방향. 함수 시그니처는 그대로 두어 호출처(orchestrator.py)와의
+인터페이스 호환을 유지한다. 결과 객체는 RunResult (subprocess.CompletedProcess
+호환: returncode / stdout / stderr).
+
+NOTE (큰 그림 1 단계에서 처리 예정):
+    - Mode A(run_generate) ↔ Mode B(run_review) ↔ Mode D(run_revise) 는
+      streaming 세션이 살아있는 한 *같은 세션*에 흡수되어야 한다.
+      이번 토대 1에서는 마이그레이션만, 흡수는 큰 그림 1에서.
+"""
 
 from __future__ import annotations
 
-import shutil
-import subprocess
-from pathlib import Path
-from subprocess import CompletedProcess
-
 from ..config import ForgeConfig, ProjectPaths
-
-
-def _run_claude_agent(
-    prompt: str,
-    agent: str,
-    max_turns: int,
-    cwd: Path,
-    timeout: int = 1800,
-) -> CompletedProcess:
-    claude = shutil.which("claude") or "claude"
-    return subprocess.run(
-        [
-            claude,
-            "-p",
-            "--agent",
-            agent,
-            "--max-turns",
-            str(max_turns),
-            "--permission-mode",
-            "bypassPermissions",
-            prompt,
-        ],
-        cwd=str(cwd),
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-        encoding="utf-8",
-        errors="replace",
-    )
+from .runner import RunResult, run_agent_sync
 
 
 def run_generate(
     request: str,
     config: ForgeConfig,
     paths: ProjectPaths,
-) -> CompletedProcess:
+) -> RunResult:
     """모드 A — spec.md 생성."""
     prompt = (
         f"사용자 요청: {request}\n\n"
         f"artifacts/spec.md가 없거나 사용자가 재생성을 요청했다. "
         f"생성 모드로 동작하여 artifacts/spec.md를 작성하라."
     )
-    return _run_claude_agent(
-        prompt, "planner", config.planner_max_turns, paths.project_root
+    return run_agent_sync(
+        "planner",
+        paths.project_root,
+        prompt,
+        max_turns=config.planner_max_turns,
     )
 
 
-def run_review(config: ForgeConfig, paths: ProjectPaths) -> CompletedProcess:
+def run_review(config: ForgeConfig, paths: ProjectPaths) -> RunResult:
     """모드 B — 기존 spec.md 검토."""
     prompt = (
         "artifacts/spec.md가 이미 존재한다. **반드시 Mode B(리뷰 모드)로 동작**하라. "
@@ -64,8 +45,11 @@ def run_review(config: ForgeConfig, paths: ProjectPaths) -> CompletedProcess:
         "(종합 판정은 READY 또는 NEEDS_REVISION 중 하나). "
         "plan-review.md 작성 완료 후에만, specs/ 에 누락된 도메인 스펙이 있으면 추가로 보강하라."
     )
-    return _run_claude_agent(
-        prompt, "planner", config.planner_review_max_turns, paths.project_root
+    return run_agent_sync(
+        "planner",
+        paths.project_root,
+        prompt,
+        max_turns=config.planner_review_max_turns,
     )
 
 
@@ -73,15 +57,18 @@ def run_contract(
     sprint_num: int,
     config: ForgeConfig,
     paths: ProjectPaths,
-) -> CompletedProcess:
+) -> RunResult:
     """모드 C — Sprint Contract 생성."""
     prompt = (
         f"Sprint {sprint_num}의 sprint-contract.md를 생성하라. "
         f"templates/sprint-contract-template.md 형식을 따르고, "
         f"spec.md / specs/ / progress-log.md / sprint-*-done.md를 반영하라."
     )
-    return _run_claude_agent(
-        prompt, "planner", config.contract_max_turns, paths.project_root
+    return run_agent_sync(
+        "planner",
+        paths.project_root,
+        prompt,
+        max_turns=config.contract_max_turns,
     )
 
 
@@ -89,13 +76,11 @@ def run_revise(
     revise_text: str,
     config: ForgeConfig,
     paths: ProjectPaths,
-) -> CompletedProcess:
+) -> RunResult:
     """모드 D — 사용자 지시에 따라 기존 spec.md를 수정.
 
-    Planner는 통상 spec.md를 직접 수정할 수 없지만, 이 모드에서만 예외적으로 Edit 허용.
-
-    ⚠ 이 prompt는 Claude가 "구체적 지시 필요"라며 Edit 없이 회피하는 패턴을
-    차단하기 위해 강제 지시 형태로 작성되어 있다.
+    streaming 도입 후에도 단독 진입점으로 유지 (orchestrator가 별도 신호로 호출).
+    큰 그림 1 단계에서 planner-spec 세션과 흡수 여부 재검토.
     """
     prompt = (
         f"# Mode D — spec.md 수정 모드 (즉시 실행, 질문 금지)\n\n"
@@ -135,8 +120,11 @@ def run_revise(
         f"spec.md mtime 미변경을 감지하여 사용자에게 경고를 전송한다. "
         f"그 상황을 피하려면 **반드시 Edit 실행 후 종료**하라."
     )
-    return _run_claude_agent(
-        prompt, "planner", config.planner_review_max_turns, paths.project_root
+    return run_agent_sync(
+        "planner",
+        paths.project_root,
+        prompt,
+        max_turns=config.planner_review_max_turns,
     )
 
 

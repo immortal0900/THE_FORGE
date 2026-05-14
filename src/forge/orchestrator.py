@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import platform
 import re
-import shutil
-import subprocess
 import sys
 import time
 from pathlib import Path
@@ -16,6 +14,7 @@ from rich.console import Console
 from ._logging import report_subprocess
 from .agents import evaluator as ev
 from .agents import planner as pl
+from .agents.runner import run_agent_sync
 from .checkpoint import Checkpoint, Phase
 from .config import ForgeConfig, ProjectPaths
 from .cost_tracker import SprintTracer, parse_cost_log
@@ -709,7 +708,6 @@ def run_cycle(
                 notifier.notify("generator_start", f"Sprint {sprint_num} Generator 세션 시작.", project_name=paths.project_name)
                 with sprint_tracer.span("generator", mode="claude-p") as info:
                     try:
-                        claude_cli = shutil.which("claude") or "claude"
                         initial_prompt = (
                             f"Sprint {sprint_num} 세션을 시작하라. "
                             f"CLAUDE.md의 세션 시작 절차를 따르되, "
@@ -722,23 +720,18 @@ def run_cycle(
                             f"세션 종료 시 artifacts/progress-log.md 최상단에 결과 블록 추가."
                         )
                         info["input"] = f"[generator/sprint-{sprint_num}] initial_prompt:\n{initial_prompt}"
-                        result = subprocess.run(
-                            [claude_cli, "-p",
-                             "--agent", "generator",
-                             "--max-turns", str(config.generator_max_turns),
-                             "--permission-mode", "bypassPermissions",
-                             initial_prompt],
-                            cwd=str(paths.project_root),
-                            capture_output=True, text=True,
-                            encoding="utf-8", errors="replace",
-                            timeout=config.max_generator_minutes * 60,
+                        # 토대 1: subprocess.run batch → 영속 Popen + stream-json 양방향.
+                        # ASK_USER / whisper 라우팅은 plan의 큰 그림 1 / 큰 그림 3에서 본격 연결.
+                        result = run_agent_sync(
+                            "generator",
+                            paths.project_root,
+                            initial_prompt,
+                            max_turns=config.generator_max_turns,
                         )
                         info["stdout"] = result.stdout or ""
                         report_subprocess(result, f"generator sprint-{sprint_num}", console)
                     except KeyboardInterrupt:
                         pass
-                    except subprocess.TimeoutExpired:
-                        notifier.notify("warning", f"Generator 시간 초과 ({config.max_generator_minutes}분).", project_name=paths.project_name)
                     except FileNotFoundError:
                         notifier.notify("error", "claude CLI를 찾을 수 없습니다.", project_name=paths.project_name)
                         return 3

@@ -1,53 +1,31 @@
-"""Evaluator 에이전트 + Playwright 통합."""
+"""Evaluator 에이전트 + Playwright 통합.
+
+토대 1 (docs/plan-judgment-velocity.md): subprocess.run batch → 영속 Popen +
+stream-json 양방향 마이그레이션. Evaluator는 ASK_USER 정책상 금지
+(scaffold/agents/evaluator.md 시스템 프롬프트에 명시) → on_question 콜백 없이 호출.
+"""
 
 from __future__ import annotations
 
 import shutil
 import subprocess
-from pathlib import Path
-from subprocess import CompletedProcess
 
 from ..config import ForgeConfig, ProjectPaths
+from .runner import RunResult, run_agent_sync
 
 
-def _run_claude_agent(
-    prompt: str,
-    agent: str,
-    max_turns: int,
-    cwd: Path,
-    timeout: int = 1800,
-) -> CompletedProcess:
-    claude = shutil.which("claude") or "claude"
-    return subprocess.run(
-        [
-            claude,
-            "-p",
-            "--agent",
-            agent,
-            "--max-turns",
-            str(max_turns),
-            "--permission-mode",
-            "bypassPermissions",
-            prompt,
-        ],
-        cwd=str(cwd),
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-        encoding="utf-8",
-        errors="replace",
-    )
-
-
-def run_evaluate(config: ForgeConfig, paths: ProjectPaths) -> CompletedProcess:
+def run_evaluate(config: ForgeConfig, paths: ProjectPaths) -> RunResult:
     """sprint-contract.md 각 항목을 평가하여 qa-report.md 작성."""
     prompt = (
         "artifacts/sprint-contract.md의 각 항목에 대해 현재 구현을 평가하라. "
         "artifacts/qa-report.md에 보고서를 작성하라. "
         "종합 판정은 PASS 또는 FAIL 중 하나여야 한다."
     )
-    result = _run_claude_agent(
-        prompt, "evaluator", config.evaluator_max_turns, paths.project_root
+    result = run_agent_sync(
+        "evaluator",
+        paths.project_root,
+        prompt,
+        max_turns=config.evaluator_max_turns,
     )
     if config.playwright_enabled:
         _append_playwright_results(paths, config.playwright_timeout_seconds)
