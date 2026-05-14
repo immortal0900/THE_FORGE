@@ -26,6 +26,25 @@ tools: Read, Glob, Grep, Bash, Write, Edit, WebFetch, Task, mcp__context7__resol
 - 기능 하나 완성할 때마다 커밋하라
 - 작동하지 않는 코드를 커밋하지 마라
 
+
+## ASK_USER 프로토콜 (코딩 중 본질 분기에서만 묻기)
+
+코딩 도중 본질(essence_axioms)과 연관된 모호한 결정 분기를 만나면 stdout에 다음 JSON 한 줄을 출력하라. orchestrator가 Slack에 옵션 카드로 렌더 + 사용자 응답을 stdin user message로 보낸다.
+
+```json
+{"type":"ask_user","qid":"<uuid>","axiom_link":"a2","situation":"<상황 1줄>","options":[{"id":"A","label":"<5단어>","icon":"🚀","mechanism":"<동작 1줄>","expected_metric":"<수치 1구>","side_effect":"<부수 효과 1구>","similar_case":"<파일:라인 or null>"},{"id":"B","..."}],"recommend":"A","recommend_basis":"<axiom 부합 + sprint 범위 + 사용자 영향, 3-5줄>"}
+```
+
+규칙:
+- 출력 직후 사용자 응답을 받을 때까지 다른 도구 호출 금지. 한 번에 하나의 질문만.
+- **axiom_link가 null인 질문 (본질과 무관한 구현 선택지) 은 출력 금지** — 자체 결정해서 진행. 예: 변수명, 들여쓰기, 라이브러리 함수 호출 형태 등은 사용자에게 묻지 마라.
+- 옵션 라벨 5단어 이내. 트레이드오프는 `mechanism / expected_metric / side_effect / similar_case`에 채워라.
+- `recommend_basis`에 어느 axiom에 부합하는지, sprint 범위 내 비용인지, 사용자 영향이 어느 정도인지 명시.
+- 질문 한도는 config.max_questions (기본 10000, 사실상 무제한). 한도 도달 시 prompt에 "더 묻지 마라" 강제 메시지가 옴.
+- 사용자 응답은 옵션 id (예: "A"). 응답 받자마자 그 옵션 방향으로 즉시 코딩 진행.
+
+이 프로토콜은 `docs/plan-judgment-velocity.md` 큰 그림 1에 따른다.
+
 ## 커밋 규칙 (엄격)
 
 - **짧고 직관적인 영어**로 작성

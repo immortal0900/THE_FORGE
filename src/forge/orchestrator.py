@@ -250,6 +250,9 @@ def _extract_scores_from_qa_report(paths: ProjectPaths) -> dict[str, int]:
 # ── 알림 헬퍼 (v2.3) ───────────────────────────────────────────────────────
 
 
+_HEARTBEAT_SECONDS = 6 * 3600   # 6시간
+
+
 def _make_on_question(
     notifier: NotifierAdapter,
     paths: ProjectPaths,
@@ -260,11 +263,12 @@ def _make_on_question(
     LLM이 stdout에 `{"type":"ask_user", ...}` JSON을 출력하면 runner가 이 콜백을
     호출한다. 콜백은:
       1) Slack 옵션 카드를 thread에 reply로 전송 (SlackNotifier일 때만)
-      2) paths.answer_signal_for(qid) 파일이 생길 때까지 폴링
-      3) 파일 내용(option_id)을 답으로 반환
+      2) paths.answer_signal_for(qid) 파일이 생길 때까지 **무기한** 폴링
+      3) 6시간마다 heartbeat 알림 ("아직 대기 중 + qid")
+      4) /stop / /exit 신호 발생 시 추천안 자동 채택 후 즉시 종료
+      5) 파일 내용(option_id)을 답으로 반환
 
-    토대 1에서는 30분 임시 타임아웃 (응답 없으면 추천안 자동 채택). 큰 그림 1
-    후속 8번 todo (무기한 백그라운드 대기 + 6h heartbeat)에서 본격 무기한 대기.
+    자동 채택 타임아웃은 폐기 (사용자 요청). 응답이 24시간 후에 와도 정상 대기.
     """
     import asyncio as _asyncio
 
@@ -273,6 +277,8 @@ def _make_on_question(
 
         qid = (ask.get("qid") or "").strip()
         fallback = (ask.get("recommend") or "").strip()
+        situation = (ask.get("situation") or "").strip()
+        axiom_link = (ask.get("axiom_link") or "").strip()
         if not qid:
             return fallback
 
@@ -286,20 +292,42 @@ def _make_on_question(
 
         answer_file = paths.answer_signal_for(qid)
         start = time.time()
-        timeout = 1800  # 30분 임시. 토대 8에서 무기한 + heartbeat로 교체.
+        last_heartbeat = start
+        console.print(
+            f"[cyan]ASK_USER qid={qid} — 사용자 응답 대기 중 (Slack 옵션 카드 전송)[/cyan]"
+        )
         while not answer_file.exists():
             if paths.stop_signal.exists() or paths.exit_signal.exists():
-                return fallback
-            if time.time() - start > timeout:
                 console.print(
-                    f"[yellow]ASK_USER qid={qid} {timeout}s 타임아웃 — 추천안 '{fallback}' 자동 채택[/yellow]"
+                    f"[yellow]ASK_USER qid={qid} — /stop or /exit 감지, 추천안 '{fallback}' 자동 채택 후 종료[/yellow]"
                 )
                 return fallback
+            now = time.time()
+            if now - last_heartbeat >= _HEARTBEAT_SECONDS:
+                elapsed_h = int((now - start) / 3600)
+                heartbeat_msg = (
+                    f"⏳ ASK_USER 응답 대기 중 ({elapsed_h}h 경과)\n"
+                    f"qid: {qid}\n"
+                    f"axiom: {axiom_link or '(없음)'}\n"
+                    f"질문: {situation[:200]}\n"
+                    f"\n위 스레드의 옵션 카드에서 버튼을 눌러 답해주세요."
+                )
+                try:
+                    notifier.notify(
+                        "info", heartbeat_msg,
+                        project_name=paths.project_name,
+                    )
+                except Exception:
+                    pass
+                last_heartbeat = now
             await _asyncio.sleep(2)
 
         try:
             answer = answer_file.read_text(encoding="utf-8").strip()
             answer_file.unlink(missing_ok=True)
+            console.print(
+                f"[green]ASK_USER qid={qid} — 응답 수신: '{answer}' (대기 {int(time.time() - start)}s)[/green]"
+            )
             return answer or fallback
         except OSError:
             return fallback
@@ -871,13 +899,15 @@ def run_cycle(
                             f"세션 종료 시 artifacts/progress-log.md 최상단에 결과 블록 추가."
                         )
                         info["input"] = f"[generator/sprint-{sprint_num}] initial_prompt:\n{initial_prompt}"
-                        # 토대 1: subprocess.run batch → 영속 Popen + stream-json 양방향.
-                        # ASK_USER / whisper 라우팅은 plan의 큰 그림 1 / 큰 그림 3에서 본격 연결.
+                        # 큰 그림 1: generator도 코딩 도중 모호한 분기에서 ASK_USER 가능.
+                        # config.max_questions(default 10000)로 한도 조정.
+                        generator_on_question = _make_on_question(notifier, paths, config)
                         result = run_agent_sync(
                             "generator",
                             paths.project_root,
                             initial_prompt,
                             max_turns=config.generator_max_turns,
+                            on_question=generator_on_question,
                         )
                         info["stdout"] = result.stdout or ""
                         report_subprocess(result, f"generator sprint-{sprint_num}", console)

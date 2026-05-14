@@ -13,6 +13,7 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import pytest
 
 from forge.config import ForgeConfig, ProjectPaths
 
@@ -333,3 +334,60 @@ def test_handle_interactive_answer_filters_other_project(tmp_path):
     notifier._handle_interactive(payload)
     answer_file = paths.answer_signal_for("xyz-999")
     assert not answer_file.exists()
+
+
+# ── 큰 그림 1 후속 (todo 8): 무기한 폴링 + /stop fallback ───────────────────
+
+
+@pytest.mark.asyncio
+async def test_on_question_returns_user_answer_from_file(tmp_path):
+    """답변 파일이 있으면 콜백이 즉시 그 option_id 반환 + 파일 삭제."""
+    from forge.orchestrator import _make_on_question
+
+    notifier, paths = _build_notifier(tmp_path)
+    notifier._web.chat_postMessage.return_value = {"ok": True, "ts": "1700.000"}
+
+    qid = "abc-123"
+    answer_path = paths.answer_signal_for(qid)
+    answer_path.write_text("B", encoding="utf-8")
+
+    cb = _make_on_question(notifier, paths, notifier._config)
+    ask = {
+        "qid": qid,
+        "options": [{"id": "A"}, {"id": "B"}],
+        "recommend": "A",
+    }
+    answer = await cb(ask)
+    assert answer == "B"
+    assert not answer_path.exists()  # 소비된 파일은 삭제
+
+
+@pytest.mark.asyncio
+async def test_on_question_fallback_on_stop_signal(tmp_path):
+    """/stop signal 감지 시 추천안 자동 채택 후 즉시 종료 (무기한 대기 중단)."""
+    from forge.orchestrator import _make_on_question
+
+    notifier, paths = _build_notifier(tmp_path)
+    notifier._web.chat_postMessage.return_value = {"ok": True, "ts": "1700.000"}
+    # 미리 stop signal 작성
+    paths.stop_signal.write_text("", encoding="utf-8")
+
+    cb = _make_on_question(notifier, paths, notifier._config)
+    ask = {
+        "qid": "stop-test",
+        "options": [{"id": "A"}, {"id": "B"}],
+        "recommend": "A",
+    }
+    answer = await cb(ask)
+    assert answer == "A"  # 추천안 자동 채택
+
+
+@pytest.mark.asyncio
+async def test_on_question_fallback_when_no_qid(tmp_path):
+    """qid 없는 ask 는 즉시 추천안 반환 (방어 코드)."""
+    from forge.orchestrator import _make_on_question
+
+    notifier, paths = _build_notifier(tmp_path)
+    cb = _make_on_question(notifier, paths, notifier._config)
+    answer = await cb({"qid": "", "options": [{"id": "A"}], "recommend": "A"})
+    assert answer == "A"
