@@ -1,6 +1,6 @@
 [project]
 name = "the-forge"
-version = "2.3.3"
+version = "2.3.4"
 description = "THE FORGE — 범용 하네스 오케스트레이터 (Planner → Generator → Evaluator)"
 readme = "README.md"
 requires-python = ">=3.12"

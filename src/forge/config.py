@@ -49,14 +49,14 @@ class ForgeConfig(BaseSettings):
     langfuse_host: str = "https://cloud.langfuse.com"
 
     # ── 공유 설정 (pyproject.toml [tool.forge]에서 로드) ──
-    max_sprint_minutes: int = 180
-    max_generator_minutes: int = 120
+    max_sprint_minutes: int = 500
+    max_generator_minutes: int = 400
     # Mode A는 spec.md + plan-review.md + Axiom Verdicts 표(5-7행) + whisper 응답을
     # 한 세션에서 처리하므로 turn 여유가 필요. Mode B(review)도 verdict 표 작성을
     # 의무화했으니 동일 수준.
-    planner_max_turns: int = 30
-    planner_review_max_turns: int = 25
-    contract_max_turns: int = 15
+    planner_max_turns: int = 60
+    planner_review_max_turns: int = 60
+    contract_max_turns: int = 60
     evaluator_max_turns: int = 100
     generator_max_turns: int = 180
     journal_max_turns: int = 80
