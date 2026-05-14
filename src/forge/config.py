@@ -188,6 +188,11 @@ class ProjectPaths:
         self.stop_signal = self.artifacts / ".stop-signal"
         self.revise_signal = self.artifacts / ".revise-signal"
 
+        # 큰 그림 3 (docs/plan-judgment-velocity.md): Slack thread_ts 영구 저장.
+        # 첫 notify 시 root 메시지가 되고 그 ts를 여기 저장 → 이후 모든 알림이
+        # 같은 스레드에 reply. 멀티 프로젝트 동시 실행 시 라우팅 단위.
+        self.slack_thread = self.artifacts / ".slack-thread"
+
         self.claude_settings = self.project_root / ".claude" / "settings.json"
         self.claude_md = self.project_root / "CLAUDE.md"
 

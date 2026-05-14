@@ -95,6 +95,10 @@ class SlackNotifier(NotifierAdapter):
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
 
+        # 큰 그림 3: 프로젝트 thread_ts 복원 (있으면 이후 모든 알림이 같은 스레드에 reply).
+        # 첫 notify 시 root 메시지로 자동 설정.
+        self._thread_ts: Optional[str] = self._load_thread_ts()
+
         if not self.enabled:
             return
 
@@ -103,6 +107,36 @@ class SlackNotifier(NotifierAdapter):
         from slack_sdk import WebClient
 
         self._web = WebClient(token=config.slack_bot_token)
+
+    def _load_thread_ts(self) -> Optional[str]:
+        """paths.slack_thread 파일에서 thread_ts 복원 (있으면)."""
+        try:
+            if self._paths.slack_thread.exists():
+                value = self._paths.slack_thread.read_text(encoding="utf-8").strip()
+                return value or None
+        except OSError:
+            return None
+        return None
+
+    def _save_thread_ts(self, ts: str) -> None:
+        """thread_ts를 영구 저장. 크래시 후 다음 forge run 시 같은 스레드 유지."""
+        try:
+            self._paths.slack_thread.parent.mkdir(parents=True, exist_ok=True)
+            self._paths.slack_thread.write_text(ts, encoding="utf-8")
+        except OSError as e:
+            logger.warning("Slack thread_ts 저장 실패 (%s): %s", self._paths.slack_thread, e)
+
+    def reset_thread(self) -> None:
+        """현재 스레드를 잊고 다음 notify에서 새 root를 만든다.
+
+        사용 시점: 같은 프로젝트에서 *새 작업 세션*을 시작하고 싶을 때
+        (예: 이전 sprint 완전 종료 후 완전히 새 프로젝트 단계 진입).
+        """
+        self._thread_ts = None
+        try:
+            self._paths.slack_thread.unlink(missing_ok=True)
+        except OSError:
+            pass
 
     @property
     def enabled(self) -> bool:
@@ -130,26 +164,41 @@ class SlackNotifier(NotifierAdapter):
         # 버튼 value 네임스페이스는 반드시 self._project_name (필터 기준과 일치해야 함)
         blocks = self._build_blocks(title, message, buttons, self._project_name)
 
+        # 큰 그림 3: thread_ts가 있으면 reply, 없으면 이 메시지가 root가 된다.
+        post_kwargs: dict = {
+            "channel": self._channel,
+            "username": self._display_name,
+            "icon_emoji": self._emoji,
+            "text": fallback_text[:3000],
+            "blocks": blocks,
+        }
+        if self._thread_ts:
+            post_kwargs["thread_ts"] = self._thread_ts
+
         try:
-            self._web.chat_postMessage(
-                channel=self._channel,
-                username=self._display_name,
-                icon_emoji=self._emoji,
-                text=fallback_text[:3000],
-                blocks=blocks,
-            )
+            resp = self._web.chat_postMessage(**post_kwargs)
         except Exception as e:
             logger.warning("Slack chat_postMessage 실패: %s", e)
             return False
 
+        # 응답의 ts가 곧 새 root_ts. thread_ts가 비어있었다면 이 메시지를 root로 설정.
+        if not self._thread_ts:
+            root_ts = (resp.get("ts") if hasattr(resp, "get") else None) if resp else None
+            if root_ts:
+                self._thread_ts = root_ts
+                self._save_thread_ts(root_ts)
+
         if file_path and Path(file_path).exists():
+            upload_kwargs: dict = {
+                "channel": self._channel,
+                "file": str(file_path),
+                "title": Path(file_path).name,
+                "initial_comment": f"📎 {Path(file_path).name}",
+            }
+            if self._thread_ts:
+                upload_kwargs["thread_ts"] = self._thread_ts
             try:
-                self._web.files_upload_v2(
-                    channel=self._channel,
-                    file=str(file_path),
-                    title=Path(file_path).name,
-                    initial_comment=f"📎 {Path(file_path).name}",
-                )
+                self._web.files_upload_v2(**upload_kwargs)
             except Exception as e:
                 logger.warning("Slack files_upload_v2 실패 (%s): %s", file_path, e)
 
