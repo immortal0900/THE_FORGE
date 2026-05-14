@@ -1,9 +1,7 @@
 import time
-from pathlib import Path
 
 from forge import orchestrator
-from forge.checkpoint import Checkpoint, Phase
-from forge.config import ForgeConfig, ProjectPaths
+from forge.config import ProjectPaths
 
 
 def test_invalidate_stale_review(tmp_path):

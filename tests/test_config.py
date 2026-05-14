@@ -1,4 +1,3 @@
-import pytest
 
 from forge.config import ForgeConfig, ProjectPaths
 

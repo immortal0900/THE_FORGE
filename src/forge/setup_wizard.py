@@ -6,7 +6,6 @@ Slack/Langfuse 토큰은 여기에 한 번만 저장되고, 모든 프로젝트�
 from __future__ import annotations
 
 import os
-import re
 from pathlib import Path
 from typing import Optional
 

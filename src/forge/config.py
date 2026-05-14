@@ -54,7 +54,7 @@ class ForgeConfig(BaseSettings):
     planner_max_turns: int = 15
     planner_review_max_turns: int = 10
     contract_max_turns: int = 12
-    evaluator_max_turns: int = 20
+    evaluator_max_turns: int = 100
     generator_max_turns: int = 180
     journal_max_turns: int = 80
 

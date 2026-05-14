@@ -54,16 +54,48 @@ def _extract_tokens_from_jsonl(since: float, until: float) -> dict:
 
     claude -p / interactive 모두 여기 기록됨. 가장 많이 쓰인 model 이름도 함께 반환
     (Langfuse가 자동 cost 계산하려면 model이 필요).
+
+    Claude Code 폴더명 규칙 (관찰 기반):
+      - cwd 전체에서 [^a-zA-Z0-9-] 문자를 모두 '-'로 치환
+      - 대소문자는 보존
+      - 예) "C:\\1.Project\\면접대비" → "C--1-Project-----"
+           "C:\\1.Project\\THE_FORGE" → "c--1-Project-THE-FORGE"
+             (사용자 환경별로 드라이브 문자 대소문자가 달라질 수 있음)
     """
     claude_home = Path.home() / ".claude" / "projects"
     totals = {"input": 0, "output": 0, "cache": 0, "model": ""}
     if not claude_home.exists():
         return totals
 
-    cwd = str(Path.cwd().resolve()).lower()
-    project_id = re.sub(r"[:\\/._]", "-", cwd)
-    session_dir = claude_home / project_id
-    if not session_dir.exists():
+    cwd_raw = str(Path.cwd().resolve())
+    # Claude Code 규칙: 영숫자와 '-' 외 모두 '-'로 치환, 대소문자 보존
+    primary = re.sub(r"[^a-zA-Z0-9-]", "-", cwd_raw)
+    # 구 규칙 폴백: 예전 버전은 '_' 기반이거나 다른 규칙을 썼을 수 있음
+    legacy = re.sub(r"[:\\/._]", "-", cwd_raw.lower())
+    candidates = [primary, primary.lower()]
+    if legacy not in candidates:
+        candidates.append(legacy)
+
+    session_dir: Optional[Path] = None
+    for cand in candidates:
+        p = claude_home / cand
+        if p.exists():
+            session_dir = p
+            break
+    # 모두 실패 시: cwd 끝부분(폴더명)을 키워드로 유사 매칭 (한 글자 한글은 모두 '-'가 되므로
+    # 마지막 폴더명은 정보량이 없을 수 있음. 상위 폴더 이름으로도 시도)
+    if session_dir is None:
+        path_tokens = [t for t in re.split(r"[\\/]", cwd_raw) if t]
+        # 영숫자 토큰만 골라 2글자 이상만 유효 키로 사용
+        keys = [re.sub(r"[^a-zA-Z0-9]", "", t) for t in path_tokens]
+        keys = [k for k in keys if len(k) >= 2]
+        if keys:
+            pattern = re.compile(".*".join(re.escape(k) for k in keys))
+            for sub in claude_home.iterdir():
+                if sub.is_dir() and pattern.search(sub.name):
+                    session_dir = sub
+                    break
+    if session_dir is None:
         return totals
 
     model_token_counts: dict[str, int] = {}
@@ -174,10 +206,26 @@ class SprintTracer:
                     auth_ok = self._lf_client.auth_check()
                 except Exception as e:
                     sys.stderr.write(f"[forge] Langfuse auth_check failed: {e!r}\n")
+                    print(
+                        f"[Langfuse] ❌ auth_check 실패: {type(e).__name__}: {e} "
+                        f"(host={config.langfuse_host})",
+                        flush=True,
+                    )
                     auth_ok = False
                 if not auth_ok:
+                    print(
+                        f"[Langfuse] ❌ 인증 실패 → 추적 비활성화 "
+                        f"(host={config.langfuse_host}, public_key 앞 8자: "
+                        f"{config.langfuse_public_key[:8] if config.langfuse_public_key else 'EMPTY'}...)",
+                        flush=True,
+                    )
                     self._lf_client = None
                 else:
+                    print(
+                        f"[Langfuse] ✅ 인증 성공 → sprint-{sprint_num} 트레이스 시작 "
+                        f"(host={config.langfuse_host}, project={project_name})",
+                        flush=True,
+                    )
                     from . import __version__
 
                     self._root_cm = self._lf_client.start_as_current_observation(
@@ -201,13 +249,24 @@ class SprintTracer:
                         self._propagate_cm.__enter__()
                     except Exception as e:
                         sys.stderr.write(f"[forge] Langfuse propagate_attributes failed: {e!r}\n")
+                        print(
+                            f"[Langfuse] ⚠ propagate_attributes 실패: {type(e).__name__}: {e}",
+                            flush=True,
+                        )
                         self._propagate_cm = None
             except ImportError as e:
                 sys.stderr.write(f"[forge] Langfuse import failed: {e!r}\n")
+                print(f"[Langfuse] ❌ import 실패: {e} — pip install langfuse", flush=True)
                 self._lf_client = None
             except Exception as e:
                 sys.stderr.write(f"[forge] Langfuse init failed: {e!r}\n")
+                print(f"[Langfuse] ❌ 초기화 실패: {type(e).__name__}: {e}", flush=True)
                 self._lf_client = None
+        else:
+            print(
+                "[Langfuse] ⚪ 비활성 (FORGE_LANGFUSE_PUBLIC_KEY/SECRET_KEY 미설정) — 토큰 추적 생략",
+                flush=True,
+            )
 
     @contextmanager
     def span(self, agent_name: str, mode: str = "claude-p") -> Iterator[dict]:
@@ -269,11 +328,16 @@ class SprintTracer:
 
             if lf_span is not None:
                 try:
+                    # Langfuse v4 usage_details 스펙:
+                    # - input/output: generalized 표준 키 (pricing 자동 계산 대상)
+                    # - cache_read_input_tokens: Anthropic 원본 키 (Langfuse가 자동 인식)
+                    # 공식 참고: LangfuseGeneration.update 시그니처 (input/output/model/
+                    # usage_details/metadata 모두 공식 파라미터, v4.5.0 검증됨)
                     update_kwargs: dict = {
                         "usage_details": {
                             "input": tok_in,
                             "output": tok_out,
-                            "cache_read": info["tokens_cache"],
+                            "cache_read_input_tokens": info["tokens_cache"],
                         },
                         "metadata": {
                             "duration_seconds": duration,
@@ -297,8 +361,28 @@ class SprintTracer:
                             stdout_raw if limit <= 0 else _truncate(stdout_raw, limit, head=False)
                         )
                     lf_span.update(**update_kwargs)
+                    has_input = "input" in update_kwargs
+                    has_output = "output" in update_kwargs
+                    print(
+                        f"[Langfuse] ✉ {agent_name} span 전송 "
+                        f"(in={tok_in:,}, out={tok_out:,}, "
+                        f"cache={info['tokens_cache']:,}, "
+                        f"prompt={'Y' if has_input else 'N'}, "
+                        f"stdout={'Y' if has_output else 'N'}, "
+                        f"model={info['model'] or 'unset'})",
+                        flush=True,
+                    )
                 except Exception as e:
                     sys.stderr.write(f"[forge] Langfuse span.update failed: {e!r}\n")
+                    print(
+                        f"[Langfuse] ❌ {agent_name} span 전송 실패: {type(e).__name__}: {e}",
+                        flush=True,
+                    )
+            elif self._lf_client is not None:
+                print(
+                    f"[Langfuse] ⚠ {agent_name} span 누락 — lf_span 초기화 실패",
+                    flush=True,
+                )
             if lf_cm is not None:
                 try:
                     lf_cm.__exit__(type(error), error, error.__traceback__ if error else None)
@@ -334,5 +418,13 @@ class SprintTracer:
         if self._lf_client is not None:
             try:
                 self._lf_client.flush()
-            except Exception:
-                pass
+                print(
+                    f"[Langfuse] 💾 sprint-{self.sprint_num} flush 완료 "
+                    f"(status={status}, spans={len(self.spans)})",
+                    flush=True,
+                )
+            except Exception as e:
+                print(
+                    f"[Langfuse] ❌ flush 실패: {type(e).__name__}: {e}",
+                    flush=True,
+                )

@@ -28,15 +28,30 @@ console = Console()
 
 
 def _stdin_ready(timeout: float = 2.0) -> bool:
-    """크로스 플랫폼 stdin 입력 감지."""
+    """크로스 플랫폼 stdin 입력 감지.
+
+    **Enter/Space 키만 resume으로 해석**한다. 아무 키나 resume으로 잡으면
+    Slack 중심 워크플로에서 Alt+Tab·포커스 전환 시 실수로 진행되는 사고가
+    생긴다(실제 재현됨: Planning 게이트 9초 만에 탈출 사건).
+
+    비활성화: 환경변수 FORGE_DISABLE_STDIN=1 설정 시 항상 False 반환.
+    """
+    import os
+    if os.environ.get("FORGE_DISABLE_STDIN", "").strip() in ("1", "true", "True", "TRUE"):
+        return False
+
     if platform.system() == "Windows":
         import msvcrt
 
         deadline = time.time() + timeout
         while time.time() < deadline:
             if msvcrt.kbhit():
-                msvcrt.getch()
-                return True
+                key = msvcrt.getch()
+                # Enter(\r or \n) 또는 Space(0x20)만 의도적 승인으로 해석
+                if key in (b"\r", b"\n", b" "):
+                    return True
+                # 다른 키는 읽고 버림 (Alt+Tab, 방향키 등 우발적 입력 차단)
+                continue
             time.sleep(0.1)
         return False
     import select
@@ -84,7 +99,11 @@ def wait_for_approval(paths: ProjectPaths, timeout: float = 600.0) -> str:
 
 
 def wait_for_approval_or_stop(paths: ProjectPaths, timeout: float = 1800.0) -> str:
-    """v2.3: /resume, /eval, /stop 시그널 대기. 반환: resume/eval/stop/timeout."""
+    """v2.3+: /resume, /eval, /skip, /stop 시그널 대기.
+
+    반환: resume/eval/skip/stop/timeout
+    - skip: FAIL 상태에서 "이 Sprint 완료 처리하고 다음 Sprint로" (강제 아카이브)
+    """
     for sig in (
         paths.approval_signal,
         paths.skip_signal,
@@ -102,6 +121,8 @@ def wait_for_approval_or_stop(paths: ProjectPaths, timeout: float = 1800.0) -> s
             return "stop"
         if paths.eval_signal.exists():
             return "eval"
+        if paths.skip_signal.exists():
+            return "skip"
         if paths.approval_signal.exists():
             return "resume"
         if _stdin_ready(timeout=1.0):
@@ -311,14 +332,15 @@ def _notify_fail_with_options(
         f"• 누적: {total_mins:.0f}분\n\n"
         f"{consecutive_line}\n\n"
         f"─────────────────\n\n"
-        f"/resume — Generator 재진입\n"
+        f"/resume — Generator 재진입 (FAIL 수정)\n"
         f"/eval — Evaluator 재실행\n"
+        f"/skip — 이 Sprint 결함 채로 완료 처리 + 다음 Sprint로\n"
         f"/stop — 여기서 중단"
     )
     notifier.notify(
         "qa_fail", msg,
         file_path=paths.qa_report, project_name=paths.project_name,
-        buttons=[["/resume", "/eval"], ["/stop"]],
+        buttons=[["/resume", "/eval"], ["/skip", "/stop"]],
     )
 
 
@@ -401,6 +423,8 @@ def run_cycle(
     notifier.start()
 
     exit_code = 0
+    # Langfuse flush 보장을 위한 현재 활성 tracer 레퍼런스 (중단 시에도 finalize)
+    _active_tracers: list = []
     try:
         _invalidate_stale_review(paths)
 
@@ -408,6 +432,7 @@ def run_cycle(
         if cp.should_run(Phase.PLANNING):
             sprint_num = paths.current_sprint()
             tracer = SprintTracer(config, sprint_num, paths.project_name, paths.cost_log)
+            _active_tracers.append(tracer)
             cp.advance(Phase.PLANNING, "planner running")
             cp.save(paths.checkpoint_file)
             # specs/ 변경 감지를 위해 실행 전 목록 기록
@@ -427,6 +452,8 @@ def run_cycle(
                     result = pl.run_review(config, paths)
                     info["stdout"] = result.stdout or ""
                     report_subprocess(result, "planner(review)", console)
+            cp.note("planner completed, awaiting plan review approval")
+            cp.save(paths.checkpoint_file)
 
             # Planner가 생성한 새 specs/*.md 감지 + Telegram 전송
             specs_after = set(paths.specs.glob("*.md")) if paths.specs.exists() else set()
@@ -444,6 +471,14 @@ def run_cycle(
                 if status == "READY"
                 else [["/skip", "/resume"], ["/revise", "/exit"]]
             )
+            # spec.md를 먼저 보내 사용자가 본문을 확인하고 plan-review와 버튼으로 결정하게 한다
+            if paths.spec.exists():
+                notifier.notify(
+                    "spec_detail",
+                    "spec.md (Planner가 작성한 기획 본문)",
+                    file_path=paths.spec,
+                    project_name=paths.project_name,
+                )
             notifier.notify(
                 "planner_done" if status == "READY" else "plan_revision",
                 f"plan-review.md 상태: {status}",
@@ -470,18 +505,53 @@ def run_cycle(
                         console.print("[yellow]revise 신호는 있으나 지시문이 비어있음 — 무시[/yellow]")
                         continue
                     console.print(f"[cyan]Planner 수정 모드 진입: {revise_text[:120]}[/cyan]")
+                    cp.note(f"planner Mode D running: {revise_text[:80]}")
+                    cp.save(paths.checkpoint_file)
+                    # spec.md mtime을 기록해 Mode D가 실제로 수정했는지 검증
+                    spec_mtime_before = (
+                        paths.spec.stat().st_mtime if paths.spec.exists() else 0
+                    )
                     with tracer.span("planner-revise") as info:
                         info["input"] = f"[planner/revise] user_directive:\n{revise_text}"
                         result = pl.run_revise(revise_text, config, paths)
                         info["stdout"] = result.stdout or ""
                         report_subprocess(result, "planner(revise)", console)
-                    # 수정 결과 다시 알림
+                    # Mode D 실제 수정 여부 검증
+                    spec_mtime_after = (
+                        paths.spec.stat().st_mtime if paths.spec.exists() else 0
+                    )
+                    if spec_mtime_before != spec_mtime_after:
+                        cp.note("revision applied, awaiting re-review approval")
+                    else:
+                        cp.note("revision skipped (Claude avoided Edit), awaiting user decision")
+                    cp.save(paths.checkpoint_file)
+                    if spec_mtime_before == spec_mtime_after:
+                        console.print(
+                            "[red]⚠ Mode D가 spec.md를 수정하지 않고 종료됨 "
+                            "— Claude가 '질문 모드'로 회피했을 가능성. "
+                            "더 구체적인 지시문으로 /revise 재시도 권장.[/red]"
+                        )
+                        notifier.notify(
+                            "warning",
+                            "⚠ Mode D 실행됐으나 spec.md가 변경되지 않았습니다. "
+                            "Claude가 추가 지시를 원하거나 지시문이 모호해 회피한 상태. "
+                            "더 구체적인 수정 지시로 `/revise`를 다시 눌러주세요.",
+                            project_name=paths.project_name,
+                        )
+                    # 수정 결과 다시 알림 — 수정된 spec.md와 plan-review.md를 둘 다 전송
                     status = pl.plan_review_status(paths)
                     plan_buttons = (
                         [["/resume", "/revise"], ["/exit"]]
                         if status == "READY"
                         else [["/skip", "/resume"], ["/revise", "/exit"]]
                     )
+                    if paths.spec.exists():
+                        notifier.notify(
+                            "spec_detail",
+                            "(수정 반영됨) spec.md",
+                            file_path=paths.spec,
+                            project_name=paths.project_name,
+                        )
                     notifier.notify(
                         "planner_done" if status == "READY" else "plan_revision",
                         f"(수정 반영됨) plan-review.md 상태: {status}",
@@ -508,6 +578,7 @@ def run_cycle(
         while True:
             sprint_num = paths.current_sprint()
             sprint_tracer = SprintTracer(config, sprint_num, paths.project_name, paths.cost_log)
+            _active_tracers.append(sprint_tracer)
 
             # 안전장치 체크
             effective_max = max_sprints if max_sprints is not None else config.max_total_sprints
@@ -526,7 +597,7 @@ def run_cycle(
 
             # Phase 2: Sprint Contract
             if cp.should_run(Phase.CONTRACT):
-                cp.advance(Phase.CONTRACT, "contract generating")
+                cp.advance(Phase.CONTRACT, f"contract generating (sprint {sprint_num})")
                 cp.save(paths.checkpoint_file)
                 with sprint_tracer.span("contract") as info:
                     info["input"] = f"[planner/contract] Sprint {sprint_num} contract generation"
@@ -534,25 +605,106 @@ def run_cycle(
                     info["stdout"] = result.stdout or ""
                     report_subprocess(result, f"planner(contract sprint-{sprint_num})", console)
 
-                # 첫 Sprint Contract만 승인 대기
+                # 첫 Sprint Contract만 승인 대기. revise 요청 시 Mode D로 되돌려 spec 수정 가능
                 if sprint_num == 1:
+                    cp.note(f"contract generated, awaiting sprint {sprint_num} approval")
+                    cp.save(paths.checkpoint_file)
                     notifier.notify(
                         "sprint_contract",
                         f"Sprint {sprint_num} contract 생성됨.",
                         file_path=paths.sprint_contract if paths.sprint_contract.exists() else None,
                         project_name=paths.project_name,
-                        buttons=[["/resume", "/exit"]],
+                        buttons=[["/resume", "/revise"], ["/exit"]],
                     )
-                    signal = wait_for_approval(paths, timeout=config.approval_timeout_seconds)
-                    if signal == "exit":
-                        return 0
+                    # revise 수용 루프 — Planning 게이트와 동일한 원리
+                    while True:
+                        signal = wait_for_approval(paths, timeout=config.approval_timeout_seconds)
+                        if signal == "exit":
+                            return 0
+                        if signal == "revise":
+                            try:
+                                revise_text = paths.revise_signal.read_text(encoding="utf-8").strip()
+                            except OSError:
+                                revise_text = ""
+                            paths.revise_signal.unlink(missing_ok=True)
+                            if not revise_text:
+                                console.print("[yellow]revise 신호는 있으나 지시문이 비어있음 — 무시[/yellow]")
+                                continue
+                            console.print(
+                                f"[cyan]Contract 게이트에서 Planner Mode D 진입: {revise_text[:120]}[/cyan]"
+                            )
+                            cp.note(f"Mode D running (from contract gate): {revise_text[:80]}")
+                            cp.save(paths.checkpoint_file)
+                            spec_mtime_before = (
+                                paths.spec.stat().st_mtime if paths.spec.exists() else 0
+                            )
+                            with sprint_tracer.span("planner-revise") as info:
+                                info["input"] = (
+                                    f"[planner/revise from contract gate] user_directive:\n{revise_text}"
+                                )
+                                result = pl.run_revise(revise_text, config, paths)
+                                info["stdout"] = result.stdout or ""
+                                report_subprocess(result, "planner(revise from contract)", console)
+                            spec_mtime_after = (
+                                paths.spec.stat().st_mtime if paths.spec.exists() else 0
+                            )
+                            if spec_mtime_before != spec_mtime_after:
+                                # spec 바뀌었으면 기존 sprint-contract.md 폐기하고 Contract 재생성
+                                console.print(
+                                    "[cyan]spec.md 수정됨 → sprint-contract.md 폐기 후 Contract 재생성[/cyan]"
+                                )
+                                paths.sprint_contract.unlink(missing_ok=True)
+                                cp.note("revision applied, regenerating contract")
+                                cp.save(paths.checkpoint_file)
+                                # Contract 재생성
+                                with sprint_tracer.span("contract") as info:
+                                    info["input"] = (
+                                        f"[planner/contract] Sprint {sprint_num} contract regen after revise"
+                                    )
+                                    result = pl.run_contract(sprint_num, config, paths)
+                                    info["stdout"] = result.stdout or ""
+                                    report_subprocess(
+                                        result, f"planner(contract regen sprint-{sprint_num})", console
+                                    )
+                            else:
+                                console.print(
+                                    "[red]⚠ Mode D가 spec.md를 수정하지 않음 — Contract 재생성 스킵[/red]"
+                                )
+                                notifier.notify(
+                                    "warning",
+                                    "⚠ Mode D 실행됐으나 spec.md 미변경 — 더 구체적인 지시로 /revise 재시도 권장.",
+                                    project_name=paths.project_name,
+                                )
+                            # 새 spec + 새 contract 알림
+                            if paths.spec.exists():
+                                notifier.notify(
+                                    "spec_detail",
+                                    "(수정 반영됨) spec.md",
+                                    file_path=paths.spec,
+                                    project_name=paths.project_name,
+                                )
+                            notifier.notify(
+                                "sprint_contract",
+                                f"(revise 반영) Sprint {sprint_num} contract 재생성됨.",
+                                file_path=paths.sprint_contract
+                                if paths.sprint_contract.exists()
+                                else None,
+                                project_name=paths.project_name,
+                                buttons=[["/resume", "/revise"], ["/exit"]],
+                            )
+                            continue  # 다시 대기 — 추가 revise 또는 resume
+                        # resume / skip / continue / timeout — 루프 탈출
+                        break
+                else:
+                    cp.note(f"contract generated (sprint {sprint_num}), auto-proceeding")
+                    cp.save(paths.checkpoint_file)
 
-                cp.advance(Phase.CONTRACT_DONE, "contract approved")
+                cp.advance(Phase.CONTRACT_DONE, f"contract approved (sprint {sprint_num})")
                 cp.save(paths.checkpoint_file)
 
             # Phase 3: Generator (claude -p, 자동 실행)
             if cp.should_run(Phase.GENERATING):
-                cp.advance(Phase.GENERATING, "generator running")
+                cp.advance(Phase.GENERATING, f"generator running (sprint {sprint_num})")
                 cp.save(paths.checkpoint_file)
                 notifier.notify("generator_start", f"Sprint {sprint_num} Generator 세션 시작.", project_name=paths.project_name)
                 with sprint_tracer.span("generator", mode="claude-p") as info:
@@ -595,12 +747,12 @@ def run_cycle(
                     file_path=paths.progress_log if paths.progress_log.exists() else None,
                     project_name=paths.project_name,
                 )
-                cp.advance(Phase.GENERATING_DONE, "generator finished")
+                cp.advance(Phase.GENERATING_DONE, f"generator finished (sprint {sprint_num})")
                 cp.save(paths.checkpoint_file)
 
             # Phase 4: Evaluator
             if cp.should_run(Phase.EVALUATING):
-                cp.advance(Phase.EVALUATING, "evaluator running")
+                cp.advance(Phase.EVALUATING, f"evaluator running (sprint {sprint_num})")
                 cp.save(paths.checkpoint_file)
                 try:
                     with sprint_tracer.span("evaluator") as info:
@@ -610,7 +762,7 @@ def run_cycle(
                         report_subprocess(result, f"evaluator sprint-{sprint_num}", console)
                 except Exception as e:
                     notifier.notify("error", f"Evaluator 실행 중 예외: {e}", project_name=paths.project_name)
-                cp.advance(Phase.EVALUATING_DONE, "evaluation complete")
+                cp.advance(Phase.EVALUATING_DONE, f"evaluation complete (sprint {sprint_num})")
                 cp.save(paths.checkpoint_file)
 
             # Phase 5: 결과 판단 — qa-report.md 유효성 검증
@@ -713,12 +865,43 @@ def run_cycle(
                     cp.advance(Phase.EVALUATING_DONE, "re-evaluation complete")
                     cp.save(paths.checkpoint_file)
                     continue  # Phase 5로 돌아가 다시 판정
+                elif decision == "skip":
+                    # FAIL이지만 강제 완료 처리 + 다음 Sprint 진입
+                    console.print(
+                        f"[yellow]⚠ /skip — Sprint {sprint_num} FAIL 강제 완료 처리 + 다음 Sprint로[/yellow]"
+                    )
+                    _archive_sprint(sprint_num, paths)
+                    notifier.notify(
+                        "sprint_pass_next",
+                        f"⚠ Sprint {sprint_num} FAIL 무시 + 완료 처리 (사용자 /skip). 다음 Sprint 진행합니다.",
+                        file_path=paths.sprint_done_path(sprint_num)
+                        if paths.sprint_done_path(sprint_num).exists()
+                        else None,
+                        project_name=paths.project_name,
+                    )
+                    # 다음 스프린트 준비: 체크포인트 리셋 (sprint_pass_next 흐름과 동일)
+                    cp.advance(Phase.NONE, f"sprint-{sprint_num} SKIP (FAIL but force-completed), continuing")
+                    cp.save(paths.checkpoint_file)
+                    # consecutive_fails는 초기화 (사용자가 의도적 skip했으므로)
+                    consecutive_fails = 0
+                    sprints_run += 1
+                    sprint_tracer.finalize(status="skipped")
+                    continue
                 # "resume": Generator 재진입 (루프 계속 — cp는 CONTRACT_DONE)
 
             sprints_run += 1
             sprint_tracer.finalize()
 
     finally:
+        # 모든 활성 tracer에 대해 finalize 보장 (예외/중단 시에도 Langfuse flush)
+        for tr in _active_tracers:
+            try:
+                tr.finalize(status="interrupted" if exit_code != 0 else "completed")
+            except Exception as e:
+                print(
+                    f"[Langfuse] ⚠ finally에서 tracer.finalize 실패: {type(e).__name__}: {e}",
+                    flush=True,
+                )
         notifier.stop()
 
     return exit_code

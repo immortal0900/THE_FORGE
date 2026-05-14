@@ -121,12 +121,14 @@ class SlackNotifier(NotifierAdapter):
         if not self.enabled or self._web is None:
             return False
 
+        # 헤더에 보일 이름 (사용자 눈용) — 폴더명/원문 그대로 OK
         display_project = project_name or self._project_name
         title_emoji = EVENT_EMOJI.get(event_type, "🔔")
         title = f"{title_emoji} [{display_project}] {event_type}"
         fallback_text = f"{title}\n\n{message}"
 
-        blocks = self._build_blocks(title, message, buttons, display_project)
+        # 버튼 value 네임스페이스는 반드시 self._project_name (필터 기준과 일치해야 함)
+        blocks = self._build_blocks(title, message, buttons, self._project_name)
 
         try:
             self._web.chat_postMessage(
@@ -221,13 +223,21 @@ class SlackNotifier(NotifierAdapter):
 
     def _run(self) -> None:
         try:
+            print(
+                f"[Slack] 🔌 Socket Mode 연결 시작 "
+                f"(project='{self._project_name}', channel='{self._channel}')",
+                flush=True,
+            )
             self._socket.connect()
+            print("[Slack] ✅ Socket Mode 연결 성공 — 버튼/슬래시 이벤트 수신 대기", flush=True)
             self._stop_event.wait()
         except Exception as e:
+            print(f"[Slack] ❌ Socket Mode 연결 실패: {type(e).__name__}: {e}", flush=True)
             logger.warning("Slack Socket Mode 연결 실패: %s", e)
         finally:
             try:
                 self._socket.disconnect()
+                print("[Slack] 🔌 Socket Mode 연결 종료", flush=True)
             except Exception:
                 pass
 
@@ -245,13 +255,15 @@ class SlackNotifier(NotifierAdapter):
         """Socket Mode 요청 처리. interactive / slash_commands 중 내 프로젝트 것만 처리."""
         from slack_sdk.socket_mode.response import SocketModeResponse
 
+        print(f"[Slack] ⬇ RECEIVED type={req.type} (project='{self._project_name}')", flush=True)
+
         # 모든 요청은 일단 ACK (Slack이 재전송하지 않도록)
         try:
             client.send_socket_mode_response(
                 SocketModeResponse(envelope_id=req.envelope_id)
             )
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[Slack] ⚠ ACK 실패: {type(e).__name__}: {e}", flush=True)
 
         if req.type == "interactive":
             self._handle_interactive(req.payload)
@@ -262,31 +274,57 @@ class SlackNotifier(NotifierAdapter):
         try:
             # view_submission (modal 제출) — revise 흐름 완료 지점
             if payload.get("type") == "view_submission":
+                print("[Slack]   ↳ type=view_submission (modal 제출)", flush=True)
                 self._handle_view_submission(payload)
                 return
 
             # block_actions (일반 버튼 클릭)
             actions = payload.get("actions", [])
             if not actions:
+                print("[Slack]   ⚠ interactive payload에 actions 없음 — 무시", flush=True)
                 return
             value = actions[0].get("value", "")
+            action_id = actions[0].get("action_id", "")
             if "::" not in value:
+                print(
+                    f"[Slack]   ⚠ 버튼 value에 '::' 없음 (value='{value}', action_id='{action_id}') "
+                    f"— 구버전/외부 버튼으로 간주하고 무시",
+                    flush=True,
+                )
                 return
             project, action_raw = value.split("::", 1)
             if project != self._project_name:
+                print(
+                    f"[Slack]   🚫 프로젝트 불일치 — 버튼='{project}' vs 현재='{self._project_name}' "
+                    f"(action='{action_raw}') — 과거 실행의 버튼을 눌렀거나 다른 forge 인스턴스용",
+                    flush=True,
+                )
                 return  # ★ 다른 프로젝트의 이벤트 — 필터 통과시키지 않음
 
             action = action_raw.strip().lower()
+            print(
+                f"[Slack]   ✓ 매칭 성공 action='{action}' "
+                f"(project='{project}', action_id='{action_id}')",
+                flush=True,
+            )
             # revise 버튼은 signal 작성이 아니라 modal 열기
             if action in ("revise", "수정"):
                 trigger_id = payload.get("trigger_id")
                 if trigger_id:
+                    print(f"[Slack]   🪟 revise 모달 열기 시도 (trigger_id={trigger_id[:20]}...)", flush=True)
                     self._open_revise_modal(trigger_id)
+                else:
+                    print(
+                        "[Slack]   ❌ trigger_id 없음 — Slack app에서 Interactivity 미활성화 "
+                        "또는 payload 형식 이상. 모달 열 수 없음.",
+                        flush=True,
+                    )
                 return
 
             self._apply_signal(action, payload)
         except Exception as e:
-            logger.warning("Slack interactive 처리 실패: %s", e)
+            print(f"[Slack]   ❌ interactive 처리 예외: {type(e).__name__}: {e}", flush=True)
+            logger.warning("Slack interactive 처리 실패: %s", e, exc_info=True)
 
     def _open_revise_modal(self, trigger_id: str) -> None:
         """revise 버튼 클릭 시 사용자에게 수정 지시 입력받는 modal을 연다."""
@@ -325,9 +363,22 @@ class SlackNotifier(NotifierAdapter):
             ],
         }
         try:
-            self._web.views_open(trigger_id=trigger_id, view=view)
+            resp = self._web.views_open(trigger_id=trigger_id, view=view)
+            print(f"[Slack]   ✅ views_open 성공 (ok={resp.get('ok')})", flush=True)
         except Exception as e:
-            logger.warning("Slack views_open 실패: %s", e)
+            # SlackApiError는 .response.data 에 구체적 에러코드 담김
+            err_detail = ""
+            resp_data = getattr(getattr(e, "response", None), "data", None)
+            if resp_data:
+                err_detail = f" | response={resp_data}"
+            print(
+                f"[Slack]   ❌ views_open 실패: {type(e).__name__}: {e}{err_detail}\n"
+                f"[Slack]      → 점검: (1) api.slack.com/apps → Interactivity & Shortcuts 토글 ON, "
+                f"(2) trigger_id 3초 만료 여부 (버튼 재클릭), "
+                f"(3) Bot Token(xoxb-)로 초기화되었는지",
+                flush=True,
+            )
+            logger.warning("Slack views_open 실패: %s", e, exc_info=True)
 
     def _handle_view_submission(self, payload: dict) -> None:
         """revise modal 제출 처리. private_metadata로 프로젝트 필터."""
@@ -473,16 +524,34 @@ class SlackNotifier(NotifierAdapter):
     def _reply(self, payload: dict, text: str) -> None:
         """Interactive 이벤트의 해당 스레드에 답장. 채널 ID는 payload에서 추출."""
         if self._web is None:
+            print("[Slack]   ⚠ _reply 불가: web client 없음", flush=True)
             return
         channel = payload.get("channel", {}).get("id") or self._channel
         thread_ts = payload.get("message", {}).get("ts")
+        if not thread_ts:
+            print(
+                "[Slack]   ⚠ _reply: thread_ts 없음 (payload에 message.ts 부재) "
+                "— 메인 채널에 직접 포스트됨",
+                flush=True,
+            )
         try:
-            self._web.chat_postMessage(
+            resp = self._web.chat_postMessage(
                 channel=channel,
                 username=self._display_name,
                 icon_emoji=self._emoji,
                 text=text[:3000],
                 thread_ts=thread_ts,
             )
+            print(
+                f"[Slack]   ✉ reply 성공 (ok={resp.get('ok')}, "
+                f"thread_ts={thread_ts[:20] if thread_ts else 'None'}...)",
+                flush=True,
+            )
         except Exception as e:
-            logger.warning("Slack reply 실패: %s", e)
+            resp_data = getattr(getattr(e, "response", None), "data", None)
+            err_detail = f" | response={resp_data}" if resp_data else ""
+            print(
+                f"[Slack]   ❌ reply 실패: {type(e).__name__}: {e}{err_detail}",
+                flush=True,
+            )
+            logger.warning("Slack reply 실패: %s", e, exc_info=True)

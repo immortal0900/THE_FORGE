@@ -35,6 +35,15 @@ class Checkpoint(BaseModel):
         self.detail = detail
         self.timestamp = datetime.now().isoformat()
 
+    def note(self, detail: str) -> None:
+        """Phase는 그대로 두고 detail과 timestamp만 갱신 (진행 상황 하트비트).
+
+        장시간 단일 Phase 안에서 일어나는 중간 이벤트(subprocess 완료, 승인 대기 진입,
+        수정 모드 실행 등)를 사용자에게 실시간 노출하기 위한 용도.
+        """
+        self.detail = detail
+        self.timestamp = datetime.now().isoformat()
+
     def save(self, checkpoint_file: Path) -> None:
         checkpoint_file.parent.mkdir(parents=True, exist_ok=True)
         data = {

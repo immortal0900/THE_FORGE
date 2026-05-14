@@ -177,7 +177,7 @@ def journal(
     else:
         console.print(
             "[yellow]docs/journal.md가 생성되지 않았습니다 — 에이전트가 파일 작성 전에 턴 소진했을 가능성.[/yellow]\n"
-            f"[dim]힌트: pyproject.toml [tool.forge]에 journal_max_turns = 120 등으로 늘리거나 --sprint N으로 범위 좁히세요.[/dim]"
+            "[dim]힌트: pyproject.toml [tool.forge]에 journal_max_turns = 120 등으로 늘리거나 --sprint N으로 범위 좁히세요.[/dim]"
         )
         tail = (result.stdout or "").strip()[-1500:]
         if tail:
