@@ -56,8 +56,14 @@ class ClaudeCliSession:
     flag 묶음 (공식, https://code.claude.com/docs/en/sdk-headless):
         claude -p --agent <name>
                --input-format stream-json --output-format stream-json --verbose
-               --permission-mode dontAsk
+               --permission-mode bypassPermissions
                (--session-id <uuid> | --resume <uuid>)
+
+    permission-mode 선택지 (공식): default | acceptEdits | bypassPermissions | plan.
+    헤드리스/비대화 환경에서는 default가 모든 도구 호출에 사용자 입력을 대기하다
+    거부되므로 **bypassPermissions** 필수. 자식 env에서 ANTHROPIC_API_KEY는 이미
+    제거해 청구 사고를 막았고(build_child_env), 작업은 cwd 하위 artifacts/로
+    제한되도록 agent system prompt에서 통제한다.
     """
 
     def __init__(
@@ -94,7 +100,7 @@ class ClaudeCliSession:
             "stream-json",
             "--verbose",
             "--permission-mode",
-            "dontAsk",
+            "bypassPermissions",
         ]
         if self.max_turns is not None:
             args.extend(["--max-turns", str(self.max_turns)])

@@ -14,7 +14,12 @@ from ..config import ForgeConfig, ProjectPaths
 from .runner import RunResult, run_agent_sync
 
 
-def run_evaluate(config: ForgeConfig, paths: ProjectPaths) -> RunResult:
+def run_evaluate(
+    config: ForgeConfig,
+    paths: ProjectPaths,
+    *,
+    notifier=None,
+) -> RunResult:
     """sprint-contract.md 각 항목을 평가하여 qa-report.md 작성."""
     prompt = (
         "artifacts/sprint-contract.md의 각 항목에 대해 현재 구현을 평가하라. "
@@ -26,6 +31,8 @@ def run_evaluate(config: ForgeConfig, paths: ProjectPaths) -> RunResult:
         paths.project_root,
         prompt,
         max_turns=config.evaluator_max_turns,
+        whisper_queue_path=paths.whisper_queue,
+        notifier=notifier,
     )
     if config.playwright_enabled:
         _append_playwright_results(paths, config.playwright_timeout_seconds)

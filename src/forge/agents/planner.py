@@ -60,18 +60,88 @@ def run_generate(
     paths: ProjectPaths,
     essence: Optional[EssenceSource] = None,
     on_question: Optional[AskUserCallback] = None,
+    notifier=None,
 ) -> RunResult:
     """모드 A — spec.md 생성.
 
     essence가 제공되면 prompt에 inline 인용. 없으면 사용자 request 그대로.
     on_question이 있으면 ASK_USER JSON 출력 시 콜백 호출 (큰 그림 1).
+
+    ⚠️ 같은 세션에서 plan-review.md도 작성한다. spec 생성 후 다음 turn에 즉시
+    리뷰를 self-author하여 사용자가 한 카드에서 결정할 수 있게 한다 (큰 그림 1
+    Mode A↔B 흡수).
     """
-    essence_block = _format_essence_for_prompt(essence) + "\n" if essence else ""
+    if essence:
+        essence_block = _format_essence_for_prompt(essence) + "\n"
+        essence_section = (
+            "## 0단계: 본질(essence_axioms) 인용\n"
+            "위 본질은 *원본 그대로 spec.md frontmatter에 박아라*. 자체 추가/수정 금지. "
+            "frontmatter는 yaml 블록(--- ... ---)으로 spec.md 최상단에 둔다.\n\n"
+        )
+    else:
+        essence_block = ""
+        # essence 외부 파일이 없으면 사용자 요청 본문에서 본질을 추출. plan 토대 3의
+        # "본질 생성 금지" 원칙은 *외부 essence 파일이 있을 때* 적용되는 우선순위
+        # 규칙으로 운용한다. 외부 파일이 없으면 사용자 요청 자체가 본질 출처이므로
+        # planner가 그 본문에서 명시적인 본질을 추출해 spec.md frontmatter에 박는다
+        # (자동 *해석/인용*이지 자체 *발명*이 아님).
+        essence_section = (
+            "## 0단계: 본질(essence_axioms) 자동 추출\n"
+            "외부 essence 파일이 제공되지 않았다. **사용자 요청 본문에서 본질 3-7개를 추출**하여 "
+            "artifacts/spec.md 최상단 frontmatter(--- ... ---)에 YAML 블록으로 박아라. "
+            "지어내지 말고 *사용자 요청 본문에 명시적으로 또는 강하게 함축된* 항목만 본질로 채택한다.\n\n"
+            "frontmatter 필수 형식:\n"
+            "```yaml\n"
+            "---\n"
+            "essence_source: planner_extracted_from_user_request\n"
+            "essence_axioms:\n"
+            "  - id: a1\n"
+            "    statement: <한 줄, 동사형, 사용자 가치 기준>\n"
+            "    rationale: <왜 본질인지 1줄, 사용자 요청 어느 부분에서 도출했는지>\n"
+            "    falsifiable_by: <어떻게 깨졌다고 입증할 수 있나, 측정/관찰 방법>\n"
+            "    weight: critical | high | medium\n"
+            "  - id: a2\n"
+            "    ...\n"
+            "---\n"
+            "```\n"
+            "**금지**: 사용자 요청에 없는 항목 추가, 통상적 베스트프랙티스 항목 자동 삽입, "
+            "테스트/문서/CI 같은 운영 항목을 본질로 두기 (그건 본질이 아니라 수단).\n\n"
+        )
     prompt = (
         f"사용자 요청: {request}\n\n"
         f"{essence_block}"
-        f"artifacts/spec.md가 없거나 사용자가 재생성을 요청했다. "
-        f"생성 모드로 동작하여 artifacts/spec.md를 작성하라."
+        "# Mode A — spec.md 생성 + 즉시 self-review (한 세션, 두 산출물)\n\n"
+        "artifacts/spec.md가 없다. 다음을 **반드시 모두 Write 도구로 작성**하라.\n\n"
+        f"{essence_section}"
+        "## 1단계: spec.md 작성\n"
+        "위 본질(frontmatter) 아래에 본문을 작성한다. 본문에는 (a) 한마디 요약 "
+        "(b) 주요 기능/요구사항 (c) 비범위 (d) 스프린트 구획(`## Sprint 1` … `## Sprint N`)을 포함하라.\n\n"
+        "## 2단계: 즉시 self-review → plan-review.md 작성\n"
+        "spec.md 작성 직후 같은 세션에서 stop 없이 artifacts/plan-review.md를 "
+        "Write로 작성한다. 다음 항목을 반드시 모두 포함:\n"
+        "  - 종합 판정 라인: `READY` 또는 `NEEDS_REVISION` 중 하나의 단어를 정확히 포함\n"
+        "  - **`## Axiom Verdicts` 섹션** (필수): essence_axioms 각 행을 10컬럼 표로 평가\n"
+        "  - 누락/모호 항목 리스트 (있으면)\n"
+        "  - 사용자가 결정 시 참고할 1-3개 핵심 트레이드오프\n\n"
+        "### Axiom Verdicts 표 형식 (10컬럼 고정, Verdict Card 렌더링 대상)\n"
+        "```\n"
+        "## Axiom Verdicts\n"
+        "| id | statement | verdict | confidence | inspection_method | measurements | evidence | counter_hypothesis | user_impact | recommend_action |\n"
+        "|----|-----------|---------|------------|-------------------|--------------|----------|--------------------|-------------|-----------------|\n"
+        "| a1 | <본질 한 줄> | VERIFIED | 95% | <기획안에서 어느 섹션을 보고 판정했나> | <spec.md의 어느 부분이 충족 근거> | <spec.md:라인 또는 섹션명> | <없거나 반박 가설 1줄> | <사용자에게 어떤 영향> | accept |\n"
+        "| a2 | ... | PARTIAL | 60% | ... | ... | ... | ... | ... | partial_regen(a2) |\n"
+        "```\n"
+        "verdict 값: VERIFIED(spec에 충분 반영) / PARTIAL(일부만 반영, 보완 필요) / MISSING(아예 누락).\n"
+        "confidence: 0-100 정수.\n"
+        "recommend_action: accept / partial_regen(<axiom_id>) / reject(<reason>) 중 하나.\n"
+        "**금지**: '대체로', '아마', '이 정도면 괜찮다' 같은 모호 표현. 모호하면 confidence ≤ 50.\n\n"
+        "## 3단계: 사용자 whisper(평문 의견) 응답\n"
+        "세션 진행 도중 `[사용자 의견] ...` 으로 시작하는 메시지가 stdin으로 들어올 수 있다. "
+        "그 의견에 평문 한 단락으로 즉시 답하라. 답변은 plan-review.md의 `## 사용자 질문 응답` "
+        "섹션에도 추가하라 (사용자가 결과에서 확인 가능하도록).\n\n"
+        "## 실패 모드\n"
+        "spec.md 또는 plan-review.md 둘 중 하나라도 Write 미호출이면 orchestrator가 "
+        "감지하여 사용자에게 경고 카드를 띄운다. 반드시 두 파일 모두 Write 후 종료하라."
     )
     return run_agent_sync(
         "planner",
@@ -80,6 +150,7 @@ def run_generate(
         max_turns=config.planner_max_turns,
         on_question=on_question,
         whisper_queue_path=paths.whisper_queue,
+        notifier=notifier,
     )
 
 
@@ -88,24 +159,58 @@ def run_review(
     paths: ProjectPaths,
     essence: Optional[EssenceSource] = None,
     on_question: Optional[AskUserCallback] = None,
+    notifier=None,
 ) -> RunResult:
     """모드 B — 기존 spec.md 검토.
 
     ⚠️ 강제 규칙: stream-json 양방향 모드에서 LLM이 종종 텍스트로만 답하고 Write 도구를
     호출하지 않는 패턴이 관찰됨. 이를 막기 위해 prompt를 *명령형*으로 강화.
     """
-    essence_block = _format_essence_for_prompt(essence) + "\n" if essence else ""
+    if essence:
+        essence_block = _format_essence_for_prompt(essence) + "\n"
+        essence_section = ""
+    else:
+        essence_block = ""
+        essence_section = (
+            "## 0단계: 본질(essence_axioms) 자동 추출 (없을 때만)\n"
+            "artifacts/spec.md 상단에 `---\\nessence_axioms:\\n  - ...\\n---` 형식의 "
+            "YAML frontmatter가 이미 있으면 이 단계는 skip. 없다면 spec.md 본문(또는 "
+            "사용자가 입력한 평문 요청)에서 본질 3-7개를 추출하여 spec.md 최상단에 "
+            "Edit 도구로 frontmatter를 박아라.\n\n"
+            "frontmatter 필수 형식:\n"
+            "```yaml\n"
+            "---\n"
+            "essence_source: planner_extracted_from_user_request\n"
+            "essence_axioms:\n"
+            "  - id: a1\n"
+            "    statement: <한 줄, 동사형, 사용자 가치 기준>\n"
+            "    rationale: <왜 본질인지 1줄, 본문의 어느 부분에서 도출했는지>\n"
+            "    falsifiable_by: <어떻게 깨졌다고 입증할 수 있나, 측정/관찰 방법>\n"
+            "    weight: critical | high | medium\n"
+            "  - id: a2\n"
+            "    ...\n"
+            "---\n"
+            "```\n"
+            "**금지**: 본문에 없는 항목 추가, 통상적 베스트프랙티스 자동 삽입, "
+            "테스트/문서/CI 같은 운영 항목을 본질로 두기 (그건 본질이 아니라 수단).\n\n"
+        )
     prompt = (
         f"{essence_block}"
         "# Mode B — 리뷰 모드 (즉시 실행, 텍스트만 답하지 마라)\n\n"
         "artifacts/spec.md가 이미 존재한다. **반드시 Mode B(리뷰 모드)로 동작**하라.\n\n"
+        f"{essence_section}"
         "## 필수 규칙 (위반 시 세션 실패)\n"
         "1. **이 세션은 반드시 Write 도구를 호출하여 artifacts/plan-review.md를 실제로 작성한 뒤 종료해야 한다.** "
         "텍스트로만 답변하고 Write 없이 끝내는 것은 허용되지 않는다.\n"
         "2. plan-review.md는 종합 판정 라인 (READY 또는 NEEDS_REVISION 중 하나)을 반드시 포함해야 한다.\n"
-        "3. 사용자 응답(예: `[사용자 의견]` 접두사 메시지)이 있으면 plan-review.md 본문에 "
-        "해당 답변을 명시 섹션 (예: `## 사용자 질문 응답`) 으로 포함해 사용자가 결과를 확인할 수 있게 하라.\n"
-        "4. plan-review.md 작성 완료 후에만, specs/ 에 누락된 도메인 스펙이 있으면 추가로 보강하라.\n\n"
+        "3. **plan-review.md에 `## Axiom Verdicts` 섹션 필수** — essence_axioms 각 행을 10컬럼 표로 평가:\n"
+        "   `| id | statement | verdict | confidence | inspection_method | measurements | evidence | counter_hypothesis | user_impact | recommend_action |`\n"
+        "   verdict 값은 VERIFIED / PARTIAL / MISSING 중 하나. confidence는 0-100 정수.\n"
+        "   recommend_action은 accept / partial_regen(<axiom_id>) / reject(<reason>) 중 하나.\n"
+        "   모호 표현('대체로', '아마') 금지, 모호하면 confidence ≤ 50.\n"
+        "4. 사용자 응답(예: `[사용자 의견]` 접두사 메시지)이 있으면 평문 한 단락으로 즉시 답하고, "
+        "plan-review.md 본문에도 `## 사용자 질문 응답` 섹션을 추가해 사용자가 결과를 확인할 수 있게 하라.\n"
+        "5. plan-review.md 작성 완료 후에만, specs/ 에 누락된 도메인 스펙이 있으면 추가로 보강하라.\n\n"
         "## 실패 모드\n"
         "Write가 한 번도 호출되지 않고 세션이 종료되면 orchestrator가 plan-review.md 부재를 감지하여 "
         "사용자에게 경고를 전송한다. 그 상황을 피하려면 **반드시 Write 실행 후 종료**하라."
@@ -117,6 +222,7 @@ def run_review(
         max_turns=config.planner_review_max_turns,
         on_question=on_question,
         whisper_queue_path=paths.whisper_queue,
+        notifier=notifier,
     )
 
 
@@ -126,6 +232,7 @@ def run_contract(
     paths: ProjectPaths,
     essence: Optional[EssenceSource] = None,
     on_question: Optional[AskUserCallback] = None,
+    notifier=None,
 ) -> RunResult:
     """모드 C — Sprint Contract 생성.
 
@@ -151,6 +258,7 @@ def run_contract(
         max_turns=config.contract_max_turns,
         on_question=on_question,
         whisper_queue_path=paths.whisper_queue,
+        notifier=notifier,
     )
 
 
@@ -158,6 +266,7 @@ def run_revise(
     revise_text: str,
     config: ForgeConfig,
     paths: ProjectPaths,
+    notifier=None,
 ) -> RunResult:
     """모드 D — 사용자 지시에 따라 기존 spec.md를 수정.
 
@@ -207,6 +316,8 @@ def run_revise(
         paths.project_root,
         prompt,
         max_turns=config.planner_review_max_turns,
+        whisper_queue_path=paths.whisper_queue,
+        notifier=notifier,
     )
 
 

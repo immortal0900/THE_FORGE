@@ -367,6 +367,7 @@ def _try_send_verdict_card(
     notifier: NotifierAdapter,
     paths: ProjectPaths,
     *,
+    source: Optional[Path] = None,
     recommendation: str = "",
     recommendation_reason: str = "",
     cost_estimate: str = "",
@@ -374,7 +375,8 @@ def _try_send_verdict_card(
 ) -> None:
     """큰 그림 2: Slack notifier일 때만 Verdict Card를 thread에 reply로 첨부.
 
-    qa-report.md에 Axiom Verdicts 표가 없으면 자체 no-op (False 반환).
+    source가 명시되지 않으면 qa-report.md(기존 동작). 명시되면 그 파일(plan-review.md 등).
+    파일에 Axiom Verdicts 표가 없으면 자체 no-op.
     Telegram 등 다른 notifier는 기존 첨부 폴백 그대로.
     """
     # 함수 지역 import로 순환 / hook 제거 우회
@@ -383,7 +385,7 @@ def _try_send_verdict_card(
     if not isinstance(notifier, SlackNotifier):
         return
     notifier.send_verdict_card(
-        paths.qa_report,
+        source if source is not None else paths.qa_report,
         recommendation=recommendation,
         recommendation_reason=recommendation_reason,
         cost_estimate=cost_estimate,
@@ -563,12 +565,24 @@ def run_cycle(
     paths = ProjectPaths(project_root)
     paths.ensure_artifacts()
 
-    if plan_file and not paths.spec.exists():
+    # --plan 파일은 spec.md로 직접 복사하지 않는다. 그 본문을 *사용자 요청*에 합쳐서
+    # planner Mode A로 보내야 planner가 (a) 본질을 추출해 frontmatter에 박고
+    # (b) plan-review.md를 함께 작성하는 의무 prompt가 적용된다.
+    # 사용자가 spec.md를 직접 만들어 둔 경우만 Mode B(review)로 진입한다.
+    if plan_file:
         plan = Path(plan_file)
-        if plan.exists():
-            paths.spec.write_text(
-                plan.read_text(encoding="utf-8"), encoding="utf-8"
+        if plan.exists() and not paths.spec.exists():
+            plan_body = plan.read_text(encoding="utf-8")
+            plan_intro = (
+                f"[기획서 본문 — 파일: {plan.name}]\n"
+                "아래 본문에서 (a) 사용자가 명시·함축한 본질(essence_axioms) 3-7개와 "
+                "(b) sprint 구획을 추출해 spec.md를 작성하라. "
+                "양식은 YAML frontmatter / 마크다운 / 평문 어떤 것이든 가능하다.\n\n"
+                "──── 본문 시작 ────\n"
             )
+            plan_outro = "\n──── 본문 끝 ────\n"
+            merged = plan_intro + plan_body + plan_outro
+            request = (request + "\n\n" + merged) if request else merged
 
     cp = Checkpoint.load(paths.checkpoint_file)
 
@@ -591,12 +605,28 @@ def run_cycle(
         if cp.should_run(Phase.PLANNING):
             # 토대 3: 사용자가 제공한 본질(essence_axioms) 로드. 없으면 None → 강제 X.
             # docs/plan-judgment-velocity.md 토대 3 참조.
-            from .judgment import inject_essence_into_spec, load_essence_for_project
+            from .judgment import (
+                inject_essence_into_spec,
+                load_essence_for_project,
+                parse_essence,
+            )
 
             essence = load_essence_for_project(
                 paths.project_root,
                 hint_path=config.essence_source_path or None,
             )
+            # --plan 파일을 essence source 후보로 추가 시도 (yaml frontmatter 또는
+            # ```yaml fence가 있으면 기계 판독 가능 → essence 객체로 변환).
+            # 못 파싱해도 planner Mode A의 자동 추출 prompt가 plan 본문에서 본질을
+            # 뽑아 spec.md frontmatter에 박을 예정 (그 사실을 사용자에게 정확히 전달).
+            plan_essence_attempted = False
+            if not essence and plan_file:
+                plan_path = Path(plan_file)
+                if plan_path.exists():
+                    plan_essence_attempted = True
+                    parsed = parse_essence(plan_path)
+                    if parsed:
+                        essence = parsed
             if essence:
                 console.print(
                     f"[cyan]essence 로드: {essence.source} ({len(essence.axioms)} axioms)[/cyan]"
@@ -606,10 +636,23 @@ def run_cycle(
             # 이렇게 해야 planner가 작업하는 동안에도 사용자가 스레드에 평문 의견
              # (whisper) 을 보낼 수 있고, handle_event가 thread_ts 매칭으로 적재 가능.
             # 첫 notify가 root가 되므로 이 한 줄이 thread_ts를 만들어준다.
-            essence_note = (
-                f"essence: {len(essence.axioms)} axioms 로드됨"
-                if essence else "essence: 없음 (사용자 요청만 보고 진행)"
-            )
+            if essence:
+                essence_note = f"essence: {len(essence.axioms)} axioms 로드됨 (출처: {essence.source})"
+            elif plan_essence_attempted:
+                essence_note = (
+                    f"essence: --plan 파일({Path(plan_file).name})에 기계 판독 가능한 "
+                    "yaml 블록은 없음 → planner가 본문에서 자동 추출하여 spec.md "
+                    "frontmatter에 박을 예정"
+                )
+            elif plan_file:
+                essence_note = (
+                    f"essence: --plan 파일({Path(plan_file).name}) 본문을 planner에 "
+                    "전달, 본문에서 추출 예정"
+                )
+            else:
+                essence_note = (
+                    "essence: 외부 파일 없음 → planner가 사용자 요청 평문에서 추출 예정"
+                )
             notifier.notify(
                 "info",
                 f"🧵 [{paths.project_name}] forge run 시작 — planner 작업 중...\n"
@@ -639,6 +682,7 @@ def run_cycle(
                         request, config, paths,
                         essence=essence,
                         on_question=on_question_cb,
+                        notifier=notifier,
                     )
                     info["stdout"] = result.stdout or ""
                     report_subprocess(result, "planner(generate)", console)
@@ -649,6 +693,7 @@ def run_cycle(
                         config, paths,
                         essence=essence,
                         on_question=on_question_cb,
+                        notifier=notifier,
                     )
                     info["stdout"] = result.stdout or ""
                     report_subprocess(result, "planner(review)", console)
@@ -706,6 +751,24 @@ def run_cycle(
                 project_name=paths.project_name,
                 buttons=plan_buttons,
             )
+            # 큰 그림 2: planner가 plan-review.md에 `## Axiom Verdicts` 표를 작성했으면
+            # 기획 단계에서도 본질 부합도 Verdict Card를 함께 띄운다. 사용자가 결정 카드
+            # 옆에서 axiom 단위 ✅⚠️❌ 분포를 보고 1탭 결정하게.
+            _try_send_verdict_card(
+                notifier,
+                paths,
+                source=paths.plan_review,
+                recommendation=(
+                    "기획 진행 — READY" if status == "READY"
+                    else "기획 수정 권장 — 위 axiom 행의 recommend_action 참고"
+                ),
+                recommendation_reason=(
+                    "모든 critical axiom이 spec.md에 반영됨"
+                    if status == "READY"
+                    else "일부 axiom이 PARTIAL/MISSING 상태"
+                ),
+                buttons=plan_buttons,
+            )
 
             # Planner 승인/수정 대기 — revise 요청이 오면 수정 모드로 재진입
             while True:
@@ -733,7 +796,7 @@ def run_cycle(
                     )
                     with tracer.span("planner-revise") as info:
                         info["input"] = f"[planner/revise] user_directive:\n{revise_text}"
-                        result = pl.run_revise(revise_text, config, paths)
+                        result = pl.run_revise(revise_text, config, paths, notifier=notifier)
                         info["stdout"] = result.stdout or ""
                         report_subprocess(result, "planner(revise)", console)
                     # Mode D 실제 수정 여부 검증
@@ -835,6 +898,7 @@ def run_cycle(
                         sprint_num, config, paths,
                         essence=sprint_essence,
                         on_question=sprint_on_question,
+                        notifier=notifier,
                     )
                     info["stdout"] = result.stdout or ""
                     report_subprocess(result, f"planner(contract sprint-{sprint_num})", console)
@@ -887,7 +951,7 @@ def run_cycle(
                                 info["input"] = (
                                     f"[planner/revise from contract gate] user_directive:\n{revise_text}"
                                 )
-                                result = pl.run_revise(revise_text, config, paths)
+                                result = pl.run_revise(revise_text, config, paths, notifier=notifier)
                                 info["stdout"] = result.stdout or ""
                                 report_subprocess(result, "planner(revise from contract)", console)
                             spec_mtime_after = (
@@ -906,7 +970,7 @@ def run_cycle(
                                     info["input"] = (
                                         f"[planner/contract] Sprint {sprint_num} contract regen after revise"
                                     )
-                                    result = pl.run_contract(sprint_num, config, paths)
+                                    result = pl.run_contract(sprint_num, config, paths, notifier=notifier)
                                     info["stdout"] = result.stdout or ""
                                     report_subprocess(
                                         result, f"planner(contract regen sprint-{sprint_num})", console
@@ -1000,7 +1064,7 @@ def run_cycle(
                 try:
                     with sprint_tracer.span("evaluator") as info:
                         info["input"] = f"[evaluator/sprint-{sprint_num}] evaluating qa-report"
-                        result = ev.run_evaluate(config, paths)
+                        result = ev.run_evaluate(config, paths, notifier=notifier)
                         info["stdout"] = result.stdout or ""
                         report_subprocess(result, f"evaluator sprint-{sprint_num}", console)
                 except Exception as e:
@@ -1035,7 +1099,7 @@ def run_cycle(
                     try:
                         with sprint_tracer.span("evaluator-rerun") as info:
                             info["input"] = f"[evaluator/sprint-{sprint_num}] re-eval after validation fail"
-                            result = ev.run_evaluate(config, paths)
+                            result = ev.run_evaluate(config, paths, notifier=notifier)
                             info["stdout"] = result.stdout or ""
                             report_subprocess(result, f"evaluator-rerun sprint-{sprint_num}", console)
                     except Exception as e:
@@ -1100,7 +1164,7 @@ def run_cycle(
                     try:
                         with sprint_tracer.span("evaluator-rerun") as info:
                             info["input"] = f"[evaluator/sprint-{sprint_num}] re-eval after FAIL"
-                            result = ev.run_evaluate(config, paths)
+                            result = ev.run_evaluate(config, paths, notifier=notifier)
                             report_subprocess(result, f"evaluator-rerun sprint-{sprint_num}", console)
                             info["stdout"] = result.stdout or ""
                     except Exception as e:

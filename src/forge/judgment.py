@@ -61,6 +61,9 @@ _STANDARD_CANDIDATES = (
     "docs/essence.yml",
     "docs/essence-axioms.yaml",
     "artifacts/essence-axioms.yaml",
+    # planner가 자동 추출하여 spec.md frontmatter에 박은 essence_axioms도 재인용 가능.
+    # 이 후보를 마지막에 두어 사용자 제공 파일 우선.
+    "artifacts/spec.md",
 )
 
 
@@ -285,14 +288,16 @@ def _parse_confidence(raw: str) -> int:
     return int(m.group(1)) if m else 0
 
 
-def parse_qa_axiom_verdicts(qa_report: Path) -> list[AxiomVerdict]:
-    """qa-report.md의 `## Axiom Verdicts` 섹션 마크다운 표를 파싱.
+def parse_axiom_verdicts(source: Path) -> list[AxiomVerdict]:
+    """어떤 마크다운 파일에서든 `## Axiom Verdicts` 섹션 표를 파싱.
 
+    qa-report.md (evaluator 결과) / plan-review.md (planner 기획 자체 평가) 양쪽에서
+    동일 형식의 verdict 표를 추출하기 위한 일반화 함수.
     표 없으면 빈 리스트. 헤더 행과 구분선은 자동 제외.
     """
-    if not qa_report.exists():
+    if not source.exists():
         return []
-    text = qa_report.read_text(encoding="utf-8", errors="replace")
+    text = source.read_text(encoding="utf-8", errors="replace")
     m = _VERDICT_SECTION_RE.search(text)
     if not m:
         return []
@@ -326,6 +331,10 @@ def parse_qa_axiom_verdicts(qa_report: Path) -> list[AxiomVerdict]:
             )
         )
     return verdicts
+
+
+# 하위 호환 alias (기존 호출처 보호).
+parse_qa_axiom_verdicts = parse_axiom_verdicts
 
 
 # ── 큰 그림 2: Slack Verdict Card 렌더 ──────────────────────────────────────

@@ -48,11 +48,15 @@ class ForgeAgentRunner:
         *,
         on_question: Optional[AskUserCallback] = None,
         whisper_queue_path: Optional[Path] = None,
+        notifier=None,
     ) -> None:
         self.session = session
         self.on_question = on_question
         self.whisper_queue_path = whisper_queue_path
         self._whisper_cursor = 0   # 이미 push 한 라인 수
+        # 큰 그림 3 echo back: LLM이 평문 응답을 내면 Slack thread에 흘려보낸다.
+        # NotifierAdapter 인터페이스(또는 None). 타입은 동적 (순환 import 회피).
+        self.notifier = notifier
 
     async def run(self, initial_prompt: str) -> RunResult:
         await self.session.start()
@@ -84,11 +88,14 @@ class ForgeAgentRunner:
                 text = self._extract_assistant_text(ev.data)
                 if text:
                     stdout_parts.append(text)
-                if self.on_question:
-                    ask = self._parse_ask_user(text)
-                    if ask:
-                        answer = await self.on_question(ask)
-                        await self.session.send_user_message(answer)
+                ask = self._parse_ask_user(text) if text else None
+                if self.on_question and ask:
+                    answer = await self.on_question(ask)
+                    await self.session.send_user_message(answer)
+                elif text and self.notifier is not None:
+                    # 큰 그림 3 (plan-judgment-velocity.md:239): LLM 평문을 thread echo.
+                    # ASK_USER JSON 라인은 옵션 카드로 별도 발사되므로 echo에서 제외.
+                    self._echo_assistant_text(text)
 
             elif ev.type == "result":
                 final = ev.data.get("result") or ev.data.get("text")
@@ -168,6 +175,35 @@ class ForgeAgentRunner:
             return "".join(parts)
         return ""
 
+    def _echo_assistant_text(self, text: str) -> None:
+        """LLM 평문 텍스트를 Slack thread에 echo. 필터링 규칙:
+
+        - ASK_USER JSON 라인 제외 (옵션 카드로 별도 발사)
+        - 빈 텍스트, 공백/구두점만, 도구 호출 사이드카 메타 제외
+        - 너무 짧은(<5자) / 너무 긴(>1500자) 텍스트는 thread 노이즈 방지 위해 자르거나 skip
+        """
+        if self.notifier is None:
+            return
+        lines = []
+        for raw in text.splitlines():
+            stripped = raw.strip()
+            if not stripped:
+                continue
+            # ASK_USER JSON 라인 제외
+            if stripped.startswith("{") and '"type"' in stripped and "ask_user" in stripped:
+                continue
+            lines.append(raw)
+        body = "\n".join(lines).strip()
+        if len(body) < 5:
+            return
+        if len(body) > 1500:
+            body = body[:1500] + "\n…(이하 생략)"
+        try:
+            self.notifier.notify_agent_say(body)
+        except Exception:
+            # echo 실패는 본 작업을 막지 않는다 (조용히 무시).
+            pass
+
     @staticmethod
     def _parse_ask_user(text: str) -> Optional[dict]:
         """텍스트에서 `{"type":"ask_user", ...}` JSON 한 줄 감지.
@@ -197,11 +233,13 @@ def run_agent_sync(
     resume: bool = False,
     on_question: Optional[AskUserCallback] = None,
     whisper_queue_path: Optional[Path] = None,
+    notifier=None,
 ) -> RunResult:
     """동기 호출자(planner.py / evaluator.py / orchestrator.py)용 진입점.
 
     내부에서 asyncio.run으로 영속 Popen + streaming 처리.
     whisper_queue_path가 주어지면 사용자 평문 의견을 LLM에 자동 push (큰 그림 3).
+    notifier가 주어지면 assistant 평문이 그 스레드로 echo 된다 (큰 그림 3 마무리).
     """
     session = ClaudeCliSession(
         agent=agent,
@@ -214,5 +252,6 @@ def run_agent_sync(
         session,
         on_question=on_question,
         whisper_queue_path=whisper_queue_path,
+        notifier=notifier,
     )
     return asyncio.run(runner.run(initial_prompt))

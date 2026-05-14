@@ -283,7 +283,7 @@ class SlackNotifier(NotifierAdapter):
 
     def send_verdict_card(
         self,
-        qa_report_path: Path,
+        source_path: Path,
         *,
         recommendation: str = "",
         recommendation_reason: str = "",
@@ -291,17 +291,21 @@ class SlackNotifier(NotifierAdapter):
         buttons: Optional[list[list[str]]] = None,
         project_name: str = "",
     ) -> bool:
-        """qa-report.md의 Axiom Verdicts 표를 Slack Verdict Card로 렌더.
+        """source_path(qa-report.md 또는 plan-review.md)의 Axiom Verdicts 표를
+        Slack Verdict Card로 렌더.
 
-        반환: 카드 전송 성공 시 True. qa-report에 axiom verdict가 없거나
+        planner가 작성한 plan-review.md / evaluator가 작성한 qa-report.md 어디든
+        같은 형식의 verdict 표가 있으면 카드로 그린다 (큰 그림 2의 본 의도).
+
+        반환: 카드 전송 성공 시 True. 해당 파일에 axiom verdict 표가 없거나
         Slack 비활성 상태면 False (호출자는 기존 notify로 폴백).
         """
         if not self.enabled or self._web is None:
             return False
 
-        from ...judgment import build_verdict_card_blocks, parse_qa_axiom_verdicts
+        from ...judgment import build_verdict_card_blocks, parse_axiom_verdicts
 
-        verdicts = parse_qa_axiom_verdicts(qa_report_path)
+        verdicts = parse_axiom_verdicts(source_path)
         if not verdicts:
             return False
 
@@ -354,6 +358,60 @@ class SlackNotifier(NotifierAdapter):
     @property
     def enabled(self) -> bool:
         return self._config.slack_enabled
+
+    # ── 큰 그림 3: agent → user echo ─────────────────────────────────────
+
+    def notify_agent_say(
+        self,
+        text: str,
+        *,
+        project_name: str = "",
+    ) -> bool:
+        """LLM 평문 응답을 thread reply로 흘림 (whisper 양방향 채널 마무리).
+
+        plan-judgment-velocity.md:239 — "의견이 진행과 일치 → '반영했다' 한 줄 답".
+        runner가 assistant 텍스트 이벤트마다 호출. 너무 짧은(공백/구두점만) /
+        ASK_USER JSON / 너무 긴 텍스트는 호출처에서 미리 필터링했다고 가정.
+        """
+        if not self.enabled or self._web is None:
+            return False
+        body = (text or "").strip()
+        if not body:
+            return False
+
+        display_project = project_name or self._project_name
+        # 카드 형식 대신 가벼운 인용 블록. 사용자에게 "LLM이 한 말"임을 명시.
+        block_text = f"💭 *agent_say*\n>{body[:2800].replace(chr(10), chr(10) + '>')}"
+        blocks = [
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": block_text},
+            }
+        ]
+        fallback = f"💭 [{display_project}] agent_say: {body[:200]}"
+
+        post_kwargs: dict = {
+            "channel": self._channel,
+            "username": self._display_name,
+            "icon_emoji": self._emoji,
+            "text": fallback[:3000],
+            "blocks": blocks,
+        }
+        if self._thread_ts:
+            post_kwargs["thread_ts"] = self._thread_ts
+
+        try:
+            resp = self._web.chat_postMessage(**post_kwargs)
+        except Exception as e:
+            logger.warning("Slack notify_agent_say 실패: %s", e)
+            return False
+
+        if not self._thread_ts:
+            root_ts = (resp.get("ts") if hasattr(resp, "get") else None) if resp else None
+            if root_ts:
+                self._thread_ts = root_ts
+                self._save_thread_ts(root_ts)
+        return True
 
     # ── 전송 ─────────────────────────────────────────────────────────────
 

@@ -38,8 +38,20 @@ def _paths(root: Optional[Path]) -> ProjectPaths:
 
 @app.command()
 def run(
-    request: Optional[str] = typer.Argument(None, help="사용자 요청 (spec 생성용)"),
-    plan: Optional[Path] = typer.Option(None, "--plan", "-p", help="기획서 파일 경로"),
+    request: Optional[str] = typer.Argument(
+        None,
+        help=(
+            "사용자 요청 평문. 본질을 직접 박아도 된다. "
+            "예: forge run \"이 프로젝트의 본질은 1) 오프라인 동작 2) 1초 내 응답\""
+        ),
+    ),
+    plan: Optional[Path] = typer.Option(
+        None, "--plan", "-p",
+        help=(
+            "기획서 파일 경로. 양식 자유 (yaml frontmatter / 마크다운 / 평문 모두 OK). "
+            "planner가 본문에서 본질을 추출해 spec.md frontmatter에 박는다."
+        ),
+    ),
     root: Optional[Path] = typer.Option(None, "--root", "-r", help="프로젝트 루트 (기본: cwd)"),
     from_phase: Optional[str] = typer.Option(None, "--from", help="시작 단계: planning|contract|generating|evaluating"),
     single_sprint: bool = typer.Option(False, "--single-sprint", help="1 스프린트만 실행 (v2.2 호환)"),
