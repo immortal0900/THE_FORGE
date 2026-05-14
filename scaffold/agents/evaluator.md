@@ -59,13 +59,37 @@ sprint-contract.md 각 항목의 구현 여부, 명세 일치, 에러 핸들링,
 
 artifacts/spec.md 상단 frontmatter에 `essence_axioms:` 블록이 있으면, qa-report.md에 다음 추가 섹션을 반드시 작성하라 (없으면 이 섹션은 생략):
 
+#### 핵심 규칙: 사용자가 카드만 읽고 8-10초 안에 판단할 수 있게
+
+각 셀은 "tests/foo.py:42 가서 봐" 같은 *위치 지시*가 아니라 **내용 자체**를 한 문장씩 친절히 풀어 쓴다. 위치만 적으면 사용자가 파일 열어 직접 찾아야 해서 카드 존재 이유가 사라진다.
+
+**각 컬럼이 답해야 할 질문 (이걸 셀에 그대로 답한다)**:
+
+- `inspection_method` ← "이 본질이 충족됐는지 어떻게 따져봤나?" → 어떤 측정/검사 절차를 *어떤 기준*으로 돌렸는지 한 문장.
+  - 좋은 예: "네트워크 차단 상태에서 핵심 기능 12개를 손으로 실행해 외부 호출 발생 여부를 확인했다"
+  - 나쁜 예: "src/net.py 점검" (절차 빠짐), "테스트 실행" (무엇을 어떻게)
+- `measurements` ← "실제로 무엇이 측정/관찰됐나?" → *구체 수치/결과 묘사*. 위치 X, 결과 O.
+  - 좋은 예: "12/12 통과, 어떤 호출도 발생 안 함"
+  - 나쁜 예: "테스트 OK", "tests 디렉토리 참조"
+- `evidence` ← "가장 강한 증거 한 줄은?" → 코드/로그/테스트 결과의 *해당 문구를 따옴표로 직접 인용*. 위치는 인용 뒤에 괄호로.
+  - 좋은 예: '"if conn is None: return cached" (src/net.py:42, 네트워크 차단 분기)'
+  - 나쁜 예: "src/net.py:42" (문구 없음), "코드에서 확인됨" (출처 없음)
+- `counter_hypothesis` ← "그래도 깨질 수 있는 시나리오는?" → 1줄 반박 또는 "없음" 명시.
+  - 좋은 예: "DNS만 차단된 환경에서는 캐시 미스 시 timeout으로 30초 멈춤 가능"
+  - 나쁜 예: 빈 셀, "검토 필요"
+- `user_impact` ← "이 본질이 깨지면 사용자에게 무슨 일이 일어나나?" → 결과 묘사.
+  - 좋은 예: "비행기/지하철에서 앱이 무한 로딩으로 멈춤"
+  - 나쁜 예: "성능 영향", "사용자 경험 저하"
+
+**작성 톤**: 사용자에게 말하듯 친절한 한국어 한 문장씩. 약어/내부 용어/줄임표 자제. 위치 인용은 evidence 셀에서만, 그것도 *해당 문구를 따옴표로 함께 적는다*. 위치만 적고 내용 없는 셀은 *값이 비어있는 것으로 간주*.
+
 ```
 ## Axiom Verdicts
 
 | id | statement | verdict | confidence | inspection_method | measurements | evidence | counter_hypothesis | user_impact | recommend_action |
 |----|-----------|---------|------------|-------------------|--------------|----------|--------------------|--------------|------------------|
-| a1 | 오프라인 동작 | VERIFIED | 95 | 네트워크 차단 후 12개 핵심 기능 실행 | 12/12 통과 | src/net.py:42 외부 호출 0건 | 없음 | spec.md 사용자 인구 정보 인용 | accept |
-| a2 | 1초 내 처리 | PARTIAL | 60 | 10MB / 100MB 입력 측정 | 10MB→0.3s, 100MB→측정 안 함 | tests/perf_test.py:34 skip | 선형이면 3s, axiom 위반 | spec.md 30% 사용자 100MB+ | partial_regen(a2) |
+| a1 | 오프라인 동작 | VERIFIED | 95 | 네트워크 차단 상태에서 핵심 기능 12개를 손으로 실행해 외부 호출 발생 여부를 확인했다 | 12/12 통과, 어떤 외부 호출도 발생하지 않음 | "if conn is None: return cached" (src/net.py:42, 네트워크 끊김 시 캐시 폴백) | DNS만 차단된 환경에서는 timeout으로 30초 멈출 수 있다 | 비행기/지하철에서 앱이 무한 로딩 없이 정상 동작 | accept |
+| a2 | 1초 내 처리 | PARTIAL | 60 | 10MB / 100MB 두 크기 입력으로 처리 시간을 측정해 axiom의 1초 임계 충족 여부를 확인했다 | 10MB는 0.3s 통과, 100MB는 아예 측정 안 됨 (테스트 skip 상태) | "@pytest.mark.skip(\"slow\")" (tests/perf_test.py:34, 100MB 케이스가 skip 마킹) | 알고리즘이 입력 크기에 선형이면 100MB는 3s 예상, axiom 위반 | spec.md에서 30%가 100MB+ 사용자라 빈도 높은 위반 | partial_regen(a2) |
 | ... | | | | | | | | | |
 
 ## Axiom 종합 가설
@@ -77,7 +101,7 @@ artifacts/spec.md 상단 frontmatter에 `essence_axioms:` 블록이 있으면, q
 - 모든 컬럼 필수. `counter_hypothesis`가 진짜로 없으면 "없음" 명시 (빈 값 금지, silent 금지).
 - `verdict` ∈ {VERIFIED, PARTIAL, MISSING}. `confidence` 는 0-100 정수.
 - `recommend_action` ∈ {`accept`, `partial_regen(axiom_ids)`, `reject(reason)`}.
-- 모호 표현 ("이 정도면 괜찮다", "대체로", "아마") 사용 시 confidence 강제 ≤50.
+- 모호 표현 ("이 정도면 괜찮다", "대체로", "아마", "spec.md §N 참조", "자세한 건 본문에서") 사용 시 confidence 강제 ≤50.
 - `weight: critical` axiom이 PARTIAL/MISSING이면 종합 판정 자동 FAIL.
 - 측정값이 없거나 `falsifiable_by`가 비어있는 axiom은 verdict=MISSING, confidence=0, evidence="검증 불가 (falsifiable_by 비어있음)" 기록.
 
