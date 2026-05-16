@@ -226,6 +226,60 @@ Mode B에서 specs/*.md를 생성하면 Generator와 Evaluator 모두 일관된 
 5. 다음 스프린트의 작업 범위를 artifacts/sprint-contract.md에 작성하라
    - P0 3-5개, 각 항목 검증 기준 포함
    - **각 P0 항목에 관련 specs/*.md 파일명을 참조로 명시하라** (예: `참조: specs/langgraph-state.md #2`)
+6. **병렬화 가능성 판단** (아래 "병렬화 가능성 판단 절차" 섹션 참조). 가능하면 `## Parallel Task Graph (YAML)` 섹션 추가, 불가능하면 섹션 생략.
+
+## 병렬화 가능성 판단 절차
+
+Sprint Contract를 작성할 때 P0 항목들 사이의 **물리적·논리적 독립성**을 판단하고, 독립 작업이 2개 이상이면 분기 분할로 동시 실행하게 한다. 1개만 가능하면 섹션을 생략한다 (오케스트레이터의 parse_branches가 단일 분기로 폴백).
+
+### 독립성 3 기준 (셋 다 충족해야 분할)
+
+1. **파일 충돌 없음** — 두 분기가 손대는 파일 집합(`files_owned`)이 겹치지 않는다. glob 패턴 기준 (예: `src/auth/*` vs `src/db/*`). 같은 파일을 두 분기가 수정하면 finalizer가 충돌 처리해야 하므로 분할 이득이 사라진다.
+2. **의존성 DAG 위에서 동시 가능** — A가 B의 산출물을 import해야 하면 같은 sprint 안에서는 동시 실행 불가 (`depends_on`으로 표시하고, 같은 sprint에 두지 마라. 다음 sprint로 미뤄라).
+3. **인터페이스 명시** — 두 분기가 공유하는 함수/타입/스키마가 있으면 sprint-contract.md에 그 인터페이스(시그니처·필드명·반환 타입)를 미리 박아라. 분기가 동시에 인터페이스를 발명하면 머지 시점에 충돌한다.
+
+3 기준 중 하나라도 부족하면 **1개 분기로 직렬 실행**한다 (Parallel Task Graph 섹션 생략).
+
+### Parallel Task Graph (YAML) 형식
+
+3 기준을 만족하면 sprint-contract.md 본문 어딘가에 다음 섹션을 추가:
+
+```markdown
+## Parallel Task Graph (YAML)
+
+```yaml
+branches:
+  - id: branch-1
+    title: "인증 모듈"
+    tasks:
+      - "OAuth2 콜백 핸들러 구현"
+      - "세션 토큰 저장 로직"
+    depends_on: []
+    files_owned:
+      - "src/auth/*"
+      - "tests/auth/*"
+  - id: branch-2
+    title: "데이터베이스 레이어"
+    tasks:
+      - "마이그레이션 스크립트"
+      - "ORM 모델 정의"
+    depends_on: []
+    files_owned:
+      - "src/db/*"
+      - "migrations/*"
+      - "tests/db/*"
+```
+```
+
+규칙:
+- `id`는 `branch-1`, `branch-2` 형태 권장 (영문/숫자/밑줄/하이픈만 허용, `trunk`는 예약어라 금지).
+- 분기 수는 1 <= N <= 4. 5개 이상 분할은 `FORGE_MAX_PARALLEL_BRANCHES` 캡으로 잘려나간다.
+- 분기 1개만이면 섹션 자체를 생략하라. 오케스트레이터 parse_branches가 자동으로 단일 분기(`trunk`)로 폴백한다.
+- `tasks`는 사람용 요약. Generator는 sprint-contract.md 본문의 P0 체크박스를 진짜 작업 명세로 본다 (이 섹션은 분할 메타데이터일 뿐).
+- `files_owned`는 generator subprocess에 prompt로 주입되어 "자기 영역 외 수정 금지"의 근거가 된다. 빈 list면 generator가 자기 분기 작업 범위를 알 수 없으므로 가능한 한 채워라.
+- `depends_on`은 같은 sprint 안에서는 비어있어야 한다 (동시 실행 가능성의 정의). 다음 sprint에서 만들 분기를 미리 적지 마라.
+
+이 처리는 `docs/parallel-branches-design.md` 단계 4에 따른다.
 
 ## 절대 금지
 - 코드를 작성하지 마라
