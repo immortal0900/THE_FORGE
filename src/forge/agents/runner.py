@@ -255,3 +255,90 @@ def run_agent_sync(
         notifier=notifier,
     )
     return asyncio.run(runner.run(initial_prompt))
+
+
+# ── 병렬 분기 실행 (parallel-branches-design.md 단계 5) ──────────────────────
+
+
+@dataclass
+class ParallelBranchTask:
+    """run_agents_parallel 한 분기 작업 정의.
+
+    cwd: ClaudeCliSession의 작업 디렉토리. 보통 worktree 절대 경로.
+    initial_prompt: build_prompt 결과. trunk artifacts 절대 경로 + files_owned가
+        주입된 상태여야 한다 (호출자 책임).
+    whisper_queue_path: 분기별 whisper 큐 (artifacts/branches/{id}/whisper-queue.jsonl).
+    max_turns: 에이전트별 turn 상한 (config.generator_max_turns / evaluator_max_turns).
+    notifier: 분기별 Slack echo 어댑터 (보통 prefix 태깅된 NotifierAdapter).
+    """
+
+    branch_id: str
+    cwd: Path
+    initial_prompt: str
+    whisper_queue_path: Optional[Path] = None
+    max_turns: Optional[int] = None
+    notifier: Optional[object] = None
+
+
+async def _run_branch_one(
+    task: ParallelBranchTask,
+    agent: str,
+    sem: asyncio.Semaphore,
+) -> tuple[str, RunResult]:
+    """세마포어 안에서 단일 분기 ClaudeCliSession 실행.
+
+    반환: (branch_id, RunResult) — gather 결과를 dict로 모으기 쉽게.
+    """
+    async with sem:
+        session = ClaudeCliSession(
+            agent=agent,
+            cwd=task.cwd,
+            max_turns=task.max_turns,
+        )
+        runner = ForgeAgentRunner(
+            session,
+            whisper_queue_path=task.whisper_queue_path,
+            notifier=task.notifier,
+        )
+        result = await runner.run(task.initial_prompt)
+    return task.branch_id, result
+
+
+def run_agents_parallel(
+    tasks: list[ParallelBranchTask],
+    agent: str,
+    *,
+    max_parallel: int,
+) -> dict[str, RunResult]:
+    """N개 분기를 동시에 실행 (asyncio.Semaphore로 한도 강제).
+
+    호출자(orchestrator)는 단계 4 parse_branches로 분기 명세를 얻고, 단계 2의
+    create_branch_worktrees로 worktree를 만든 뒤, 각 분기에 대해
+    ParallelBranchTask를 구성해 이 함수에 넘긴다.
+
+    설계:
+    - run_agent_sync는 변경 없이 그대로 유지 (단일 분기 + finalizer가 사용).
+    - 각 ClaudeCliSession은 자기 uuid를 자동 생성 (cli_session.py:81)이라 동시 실행
+      시 세션 id 충돌 0. cwd만 분기별로 분리하면 충분.
+    - max_parallel은 config.max_parallel_branches에서 받음 (1 <= N <= 4 캡은
+      ForgeConfig validator가 이미 강제).
+
+    반환: {branch_id: RunResult}. 순서는 입력 tasks 순서와 무관 (asyncio.gather
+    결과를 dict로 모으므로 호출자가 branch_id로 조회한다).
+
+    예외: asyncio.gather 안에서 한 분기가 예외를 던지면 그대로 전파 (모든 분기
+    실패를 모아 보고하는 정책은 호출자가 try/except로 결정).
+    """
+    if not tasks:
+        return {}
+    if max_parallel < 1:
+        max_parallel = 1
+
+    async def _gather() -> list[tuple[str, RunResult]]:
+        sem = asyncio.Semaphore(max_parallel)
+        return await asyncio.gather(
+            *[_run_branch_one(t, agent, sem) for t in tasks]
+        )
+
+    pairs = asyncio.run(_gather())
+    return {bid: result for bid, result in pairs}
