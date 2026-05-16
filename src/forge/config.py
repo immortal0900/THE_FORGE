@@ -9,6 +9,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from .autoinfer import infer_bot_display_name, infer_project_name
@@ -81,6 +82,40 @@ class ForgeConfig(BaseSettings):
 
     # ── Langfuse span input/output 최대 문자 수. 0 이하면 무제한. ──
     langfuse_truncate_chars: int = 8000
+
+    # ── 병렬 분기 (parallel-branches-design.md 단계 0) ──
+    # 최대 동시 분기 수. 기본 1 = 직렬 모드 (기존 동작과 동일, 회귀 0).
+    # 캡: 1 <= N <= 4. 환경변수 FORGE_MAX_PARALLEL_BRANCHES.
+    max_parallel_branches: int = 1
+    # 한 분기가 몇 번 연속 실패하면 Planner 재호출(escalation)을 발사할지.
+    # 캡: 1 <= N <= 10. 환경변수 FORGE_BRANCH_FAIL_ESCALATE_THRESHOLD.
+    branch_fail_escalate_threshold: int = 2
+
+    @field_validator("max_parallel_branches", mode="before")
+    @classmethod
+    def _clamp_max_parallel_branches(cls, v):
+        try:
+            n = int(v)
+        except (TypeError, ValueError):
+            return 1
+        if n < 1:
+            return 1
+        if n > 4:
+            return 4
+        return n
+
+    @field_validator("branch_fail_escalate_threshold", mode="before")
+    @classmethod
+    def _clamp_branch_fail_escalate_threshold(cls, v):
+        try:
+            n = int(v)
+        except (TypeError, ValueError):
+            return 2
+        if n < 1:
+            return 1
+        if n > 10:
+            return 10
+        return n
 
     @property
     def telegram_enabled(self) -> bool:
@@ -241,3 +276,92 @@ class ProjectPaths:
 
     def sprint_done_path(self, sprint_num: int) -> Path:
         return self.artifacts / f"sprint-{sprint_num}-done.md"
+
+    # ── 병렬 분기 헬퍼 (parallel-branches-design.md 단계 3) ──
+
+    @property
+    def trunk_root(self) -> Path:
+        """trunk worktree의 절대 경로.
+
+        self가 worktree(`<trunk>/.worktrees/sprint-N-branch-K`) 위치를 가리키더라도
+        `git rev-parse --git-common-dir`을 사용해 trunk 위치로 거슬러 올라간다.
+
+        - trunk 안에서 호출: git이 ".git" 또는 "<trunk>/.git" 반환 → 부모가 trunk
+        - worktree 안에서 호출: git이 "<trunk>/.git" 절대 경로 반환 → 부모가 trunk
+
+        git이 없거나 not-a-repo이면 self.project_root를 그대로 반환 (안전 fallback).
+        """
+        import subprocess
+
+        try:
+            proc = subprocess.run(
+                ["git", "-C", str(self.project_root), "rev-parse", "--git-common-dir"],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                check=False,
+            )
+        except (FileNotFoundError, OSError):
+            return self.project_root
+        if proc.returncode != 0:
+            return self.project_root
+        raw = proc.stdout.strip()
+        if not raw:
+            return self.project_root
+        git_dir = Path(raw)
+        if not git_dir.is_absolute():
+            git_dir = (self.project_root / git_dir).resolve()
+        else:
+            git_dir = git_dir.resolve()
+        return git_dir.parent
+
+    def branch_paths(
+        self,
+        branch_id: str,
+        *,
+        in_worktree: bool = False,
+    ) -> "ProjectPaths":
+        """분기별 ProjectPaths.
+
+        branch_id="trunk" 면 self를 그대로 반환 (회귀 0 보호).
+        그 외 분기는 새 ProjectPaths 인스턴스를 만들고, 분기별 경로 필드만 override.
+
+        in_worktree=True
+            generator/evaluator subprocess가 cwd=worktree에서 사용하는 모드.
+            spec/sprint-contract/plan-review는 self.project_root/artifacts/* 그대로
+            (git이 worktree로 sync한 카피를 가리킴).
+        in_worktree=False
+            orchestrator/finalizer가 trunk에서 사용하는 모드.
+            spec/sprint-contract/plan-review는 self.project_root/artifacts/* 그대로
+            (= trunk 절대 경로).
+
+        progress_log / qa_report / whisper_queue 는 **두 모드 모두 항상 trunk 절대
+        경로**(artifacts/branches/{branch_id}/...)를 가리킨다. 분기별 .gitignore 영역
+        이라 worktree에는 존재하지 않기 때문.
+        """
+        if branch_id == "trunk":
+            return self
+
+        base = self.project_root  # in_worktree=True면 worktree, False면 trunk
+        bp = ProjectPaths(base)
+
+        # 분기별 산출물은 항상 trunk artifacts/branches/{branch_id}/ 아래로 격리.
+        trunk = self.trunk_root
+        branch_dir = trunk / "artifacts" / "branches" / branch_id
+        bp.progress_log = branch_dir / "progress-log.md"
+        bp.qa_report = branch_dir / "qa-report.md"
+        bp.whisper_queue = branch_dir / "whisper-queue.jsonl"
+        return bp
+
+    def ensure_branch_artifacts(self, branch_id: str) -> None:
+        """artifacts/branches/{branch_id}/ 디렉토리 보장 (trunk 기준).
+
+        generator/evaluator가 progress-log/qa-report/whisper-queue를 쓸 수 있도록
+        분기 시작 전 호출.
+        """
+        if branch_id == "trunk":
+            return
+        (self.trunk_root / "artifacts" / "branches" / branch_id).mkdir(
+            parents=True, exist_ok=True
+        )
