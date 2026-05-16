@@ -186,6 +186,16 @@ Obsidian ↔ Google Drive 양방향 동기화의 1차 구현이 Sprint 1~4로 �
 - 다른 artifact, 소스 코드 수정 금지
 - git commit도 하지 마라 — 사용자가 직접 결정
 
+### 자동 커밋 영역 분리 (병렬 모드, parallel-branches-design.md 단계 2)
+
+병렬 분기 모드(FORGE_MAX_PARALLEL_BRANCHES >= 2) 도입 후 "commit은 사용자 결정" 정책은 다음과 같이 영역별로 분리된다. journal 에이전트의 작업과는 무관하지만, 저널이 git 흐름을 해석할 때 이 분리를 알아두면 좋다:
+
+- **trunk 사용자 코드** (`src/`, `tests/` 등 git 추적 대상): **사용자가 commit 결정** (기존 정신 유지). orchestrator는 손대지 않는다.
+- **시스템 산출물** (`artifacts/spec.md`, `artifacts/sprint-contract.md`, `artifacts/plan-review.md`): **orchestrator 자동 커밋** (신규). planner가 sprint-contract를 쓴 직후 git에 반영되어야 worktree로 sync되기 때문.
+- **`.worktrees/sprint-*` 임시 작업대**: **orchestrator 자동 커밋** (신규). finalizer가 머지하려면 분기 ref에 commit이 있어야 한다.
+
+비유: 공장 안의 임시 작업대(.worktrees/)는 자동 도장. 본사 사무직(planner/finalizer)이 쓴 보고서/계획서는 시스템 도장으로 즉시 보관. 작업자(사용자)의 노트(사용자 코드)는 본인 결재 후 캐비넷 보관.
+
 ## 절대 금지
 
 - 코드 수정 (src/, tests/ 등)
