@@ -69,9 +69,24 @@ class TelegramReceiver:
         text = message.get("text", "") or message.get("caption", "") or ""
         if text.startswith("/"):
             self._handle_command(text.strip())
+        elif text.strip():
+            # 단계 9: 평문 메시지(`@branch-N`/`@all` 또는 일반) -> whisper 라우팅.
+            self._handle_whisper(text.strip())
         doc = message.get("document")
         if doc:
             self._handle_file(doc, message.get("caption", ""))
+
+    def _handle_whisper(self, text: str) -> None:
+        """평문 메시지를 분기 prefix에 따라 라우팅 (단계 9)."""
+        from ..routing import append_whisper_routed
+
+        try:
+            self.paths.ensure_artifacts()
+            targets = append_whisper_routed(self.paths, text)
+            if targets and any(t != "trunk" for t in targets):
+                self._reply(f"↳ whisper 라우팅 -> {', '.join(targets)}")
+        except OSError:
+            pass
 
     def _handle_command(self, text: str) -> None:
         cmd = text.split(maxsplit=1)[0].lower()

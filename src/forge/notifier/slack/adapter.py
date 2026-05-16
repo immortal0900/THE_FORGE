@@ -95,6 +95,12 @@ class SlackNotifier(NotifierAdapter):
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
 
+        # 단계 9: Slack rate limit 보호. 병렬 분기 N개 동시 알림 시 throttling 방지.
+        # 0.5초 간격(2 msg/s) 토큰 버킷 + burst 4개.
+        from ..routing import TokenBucketRateLimiter
+
+        self._rate_limiter = TokenBucketRateLimiter(rate_per_sec=2.0, burst=4)
+
         # 큰 그림 3: 프로젝트 thread_ts 복원 (있으면 이후 모든 알림이 같은 스레드에 reply).
         # 첫 notify 시 root 메시지로 자동 설정.
         self._thread_ts: Optional[str] = self._load_thread_ts()
@@ -426,6 +432,12 @@ class SlackNotifier(NotifierAdapter):
         if not self.enabled or self._web is None:
             return False
 
+        # 단계 9: 발사 직전 rate limit 토큰 acquire (동시 N개 폭주 시 자동 큐잉).
+        try:
+            self._rate_limiter.acquire(timeout=10.0)
+        except Exception:
+            pass
+
         # 헤더에 보일 이름 (사용자 눈용) — 폴더명/원문 그대로 OK
         display_project = project_name or self._project_name
         title_emoji = EVENT_EMOJI.get(event_type, "🔔")
@@ -623,21 +635,21 @@ class SlackNotifier(NotifierAdapter):
             logger.warning("Slack event 처리 실패: %s", e, exc_info=True)
 
     def _append_whisper(self, text: str) -> None:
-        """사용자 평문 의견을 paths.whisper_queue JSONL에 한 줄 append.
+        """사용자 평문 의견을 분기 prefix에 따라 라우팅 (단계 9).
 
-        runner의 whisper poller가 매 LLM turn 사이마다 새 라인을 읽고 stdin push.
+        - `@branch-2 메시지` -> artifacts/branches/branch-2/whisper-queue.jsonl
+        - `@all 메시지` -> 모든 활성 분기 + trunk
+        - prefix 없음 -> trunk artifacts/.whisper-queue.jsonl (기존 동작 보존)
         """
-        import json
-        from datetime import datetime
+        from ..routing import append_whisper_routed
 
-        record = {
-            "at": datetime.now().isoformat(timespec="seconds"),
-            "text": text,
-        }
         try:
-            self._paths.whisper_queue.parent.mkdir(parents=True, exist_ok=True)
-            with self._paths.whisper_queue.open("a", encoding="utf-8") as fh:
-                fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+            targets = append_whisper_routed(self._paths, text)
+            if targets and any(t != "trunk" for t in targets):
+                print(
+                    f"[Slack]   ↳ whisper 라우팅 -> {', '.join(targets)}",
+                    flush=True,
+                )
         except OSError as e:
             logger.warning("Slack whisper 적재 실패: %s", e)
 
