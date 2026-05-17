@@ -2107,29 +2107,43 @@ def run_cycle(
                             result = ev.run_evaluate(config, paths, notifier=notifier)
                             info["stdout"] = result.stdout or ""
                             report_subprocess(result, f"evaluator sprint-{sprint_num}", console)
-                        # 1차 cold start exit=1 자동 1회 재시도. evaluator subprocess가
-                        # 첫 turn에 일찍 죽는 패턴(returncode != 0 + 짧은 stdout) — claude
-                        # CLI cold start로 추정. 정상 evaluator는 보통 5K+ chars 출력.
-                        if result.returncode != 0 and len(result.stdout or "") < 1000:
+                        # evaluator subprocess 실패 자동 재시도 (최대 2회). 패턴:
+                        # (a) cold start: returncode != 0 + stdout < 1000 chars 일찍 죽음.
+                        # (b) GUI hang: 평가 도중 GUI mainloop를 실행해 Bash tool이 멈춤.
+                        # qa-report.md가 부재거나 "종합 판정: PASS|FAIL"이 없으면 재시도.
+                        retry_attempts = 0
+                        while retry_attempts < 2:
+                            if paths.qa_report.exists():
+                                _qa_text = paths.qa_report.read_text(
+                                    encoding="utf-8", errors="replace"
+                                )
+                                if (
+                                    "종합 판정: PASS" in _qa_text
+                                    or "종합 판정: FAIL" in _qa_text
+                                ):
+                                    break
+                            if result.returncode == 0 and len(result.stdout or "") >= 1000:
+                                break
+                            retry_attempts += 1
                             console.print(
-                                f"[yellow]Sprint {sprint_num} evaluator 1차 실패 (cold start 패턴, "
-                                f"stdout={len(result.stdout or '')} chars, exit={result.returncode}) "
-                                f"— 자동 1회 재시도[/yellow]"
+                                f"[yellow]Sprint {sprint_num} evaluator 재시도 {retry_attempts}/2 "
+                                f"(stdout={len(result.stdout or '')} chars, exit={result.returncode}, "
+                                f"qa-report 미완)[/yellow]"
                             )
                             notifier.notify(
                                 "info",
-                                f"Sprint {sprint_num} evaluator 1차 실패 — 자동 1회 재시도 (cold start 회피)",
+                                f"Sprint {sprint_num} evaluator 재시도 {retry_attempts}/2 (cold start/GUI hang 회피)",
                                 project_name=paths.project_name,
                             )
                             time.sleep(2)
-                            with sprint_tracer.span("evaluator-cold-retry") as info:
+                            with sprint_tracer.span(f"evaluator-retry-{retry_attempts}") as info:
                                 info["input"] = (
-                                    f"[evaluator/sprint-{sprint_num}] auto retry after cold start exit=1"
+                                    f"[evaluator/sprint-{sprint_num}] auto retry #{retry_attempts}"
                                 )
                                 result = ev.run_evaluate(config, paths, notifier=notifier)
                                 info["stdout"] = result.stdout or ""
                                 report_subprocess(
-                                    result, f"evaluator-cold-retry sprint-{sprint_num}", console
+                                    result, f"evaluator-retry-{retry_attempts} sprint-{sprint_num}", console
                                 )
                     except Exception as e:
                         notifier.notify("error", f"Evaluator 실행 중 예외: {e}", project_name=paths.project_name)

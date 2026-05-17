@@ -109,6 +109,9 @@ class ClaudeCliSession:
         else:
             args.extend(["--session-id", self.session_id])
 
+        # claude CLI는 stream-json 라인 1개가 수십 KB~수 MB 도달 가능
+        # (tool 출력, Read 결과 등). asyncio readline() 기본 한계 64KB로는
+        # LimitOverrunError 발생. 10MB로 늘려 큰 응답도 단일 라인으로 처리.
         self.proc = await asyncio.create_subprocess_exec(
             *args,
             cwd=str(self.cwd),
@@ -116,6 +119,7 @@ class ClaudeCliSession:
             stdout=PIPE,
             stderr=PIPE,
             env=build_child_env(),
+            limit=10 * 1024 * 1024,
         )
 
     async def send_user_message(self, text: str) -> None:

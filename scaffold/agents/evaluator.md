@@ -27,6 +27,15 @@ artifacts/sprint-contract.md의 각 항목에 대해 현재 구현을 평가하�
 ### Step 2: 자동화 검증 실행
 Bash로 pytest, npm test, lint, 타입 체크, 서버 실행 등을 시도하라.
 
+**🚫 절대 금지 (세션 hang 방지)**:
+- **GUI mainloop을 직접 실행하지 마라.** `python <name>.py`, `node <name>.js` 등이 Tkinter/Qt/Electron/wx/PySide/curses 같은 mainloop를 호출하면 Bash tool이 영원히 기다리다 evaluator 세션이 죽는다.
+- **확인 방법**: `grep "mainloop\|app.exec\|run(host=\|listen(\|input()"` 으로 차단 호출 미리 점검. 매치되면 그 파일은 직접 실행 금지.
+- **대체 검증**: (a) `python -c "import <module>"` 로 import 성공만 확인, (b) `python -c "from <module> import <Class>; <Class>()"` 로 인스턴스화만 확인, (c) `python <test_file>.py` 같은 단위 테스트는 OK, (d) 코드 정적 분석 + grep + AST parse 로 대체.
+- **sprint-contract.md 가 "수동 시연"·"GUI 시연" 항목을 명시했어도, 실제 GUI 실행은 사용자 몫이다. evaluator는 코드/로그/정적 분석 결과만 보고하라.**
+
+**Bash 명령 timeout**:
+- 모든 Bash 호출에 `timeout=30000` (30초) 이하 명시. 무한 대기 가능성이 있는 명령(server, watcher, REPL)은 호출 자체 금지.
+
 **Playwright/브라우저 도구**:
 - spec.md/sprint-contract.md가 브라우저 확인을 요구하거나 평가 대상이 웹 UI(HTML 슬라이드·웹앱·대시보드)일 때 사용.
 - `playwright.config.*` 있으면 오케스트레이터가 `npx playwright test` 자동 실행 후 결과 qa-report.md 말미에 붙음.
