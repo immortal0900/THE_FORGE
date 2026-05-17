@@ -469,6 +469,8 @@ artifacts/.stop-signal
 | `FORGE_MAX_CONSECUTIVE_FAILS` | int | `3` | 연속 FAIL 허용. |
 | `FORGE_MAX_TOTAL_SPRINTS` | int | `20` | 자동 루프 최대 스프린트. |
 | `FORGE_APPROVAL_TIMEOUT_SECONDS` | int | `86400` | 승인 대기 타임아웃 (24h). |
+| `FORGE_MAX_PARALLEL_BRANCHES` | int | `1` | 한 스프린트 안에서 동시에 실행할 병렬 분기 수. 1~4 범위로 자동 클램프 (사용자가 5 입력 시 4로 잘림, ValidationError로 죽지 않음). 기본 1은 기존 forge와 100% 동일 동작 (회귀 0). N≥2면 sprint-contract.md의 `## Parallel Task Graph (YAML)` 섹션을 따라 git worktree로 분기 격리 + 분기당 evaluator 1:1 + 마지막에 finalizer가 trunk로 머지. 상세는 `docs/parallel-branches-design.md`. |
+| `FORGE_BRANCH_FAIL_ESCALATE_THRESHOLD` | int | `2` | 한 분기가 연속 N회 FAIL하면 Planner 재호출(escalation)을 발사할지의 임계점. 1~10 범위로 자동 클램프. 임계점 미만은 자동 재시도(사용자 알림 없음), 도달 시 일괄 알림 1건 + Planner 재호출 + plan-review 게이트 우회. 다중 분기 모드에서만 의미. |
 
 ### 5.4 `pyproject.toml [tool.forge]` 예시
 

@@ -612,6 +612,11 @@ def _ensure_gitignore(paths: ProjectPaths) -> None:
         "artifacts/.eval-signal",
         "artifacts/.stop-signal",
         "artifacts/.revise-signal",
+        # 병렬 분기 (parallel-branches-design.md 단계 2, 3)
+        ".worktrees/",
+        "artifacts/branches/",
+        "artifacts/sprint-*-done.md",
+        "artifacts/.merge-decisions/",
     ]
     gi = paths.project_root / ".gitignore"
     existing = gi.read_text(encoding="utf-8") if gi.exists() else ""
