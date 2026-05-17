@@ -1817,8 +1817,29 @@ def run_cycle(
                 if expected_cap_branches:
                     sent = _try_send_branch_capability_cards(notifier, paths, sprint_num)
                     if sent > 0:
+                        # 미리보기 모드: sprint-contract.md의 YAML 섹션을 미리 파싱해서
+                        # 사용자에게 "5장 카드 = 5병렬?"의 혼동을 해소. 카드 수가 곧
+                        # 병렬 수가 아님을 명시.
+                        try:
+                            _sct = (
+                                paths.sprint_contract.read_text(encoding="utf-8", errors="replace")
+                                if paths.sprint_contract.exists()
+                                else ""
+                            )
+                            _preview = parse_branches(_sct)
+                            _n_preview = len(_preview)
+                            _ids_preview = [b.id for b in _preview]
+                            if _n_preview == 1 and _ids_preview == ["trunk"]:
+                                _mode_preview = "단일 직렬 (실제 LLM 세션 1개)"
+                            elif _n_preview == 1:
+                                _mode_preview = f"단일 직렬 (실제 LLM 세션 1개, branch={_ids_preview[0]})"
+                            else:
+                                _mode_preview = f"병렬 {_n_preview} worktree (실제 LLM 세션 {_n_preview}개 동시)"
+                        except Exception:
+                            _mode_preview = "(모드 미리보기 실패, contract 검증 후 결정)"
                         console.print(
-                            f"[cyan]Sprint {sprint_num} Branch Capability Card {sent}장 발송 — 사용자 결정 대기[/cyan]"
+                            f"[cyan]Sprint {sprint_num} Branch Capability Card {sent}장 발송 — "
+                            f"사용자 결정 대기 / 실행 모드: {_mode_preview}[/cyan]"
                         )
                         keep_ids, drop_ids, revise_ids = _wait_for_branch_capability_decisions(
                             paths, expected_cap_branches
@@ -2006,6 +2027,26 @@ def run_cycle(
                 )
                 branch_specs = branch_specs[: config.max_parallel_branches]
 
+            # ── 실행 모드 명시 (사용자 가독성, branch 표기 혼동 방지) ──
+            n_branches = len(branch_specs)
+            if n_branches == 1:
+                _branch_ids = [b.id for b in branch_specs]
+                if _branch_ids == ["trunk"]:
+                    mode_label = "단일 직렬 (Parallel Task Graph YAML 섹션 부재 → trunk 폴백, generator 세션 1개)"
+                else:
+                    mode_label = f"단일 직렬 (branch {_branch_ids[0]}, generator 세션 1개)"
+            else:
+                mode_label = (
+                    f"병렬 {n_branches}개 worktree "
+                    f"(generator 세션 {n_branches}개 동시, evaluator 세션 {n_branches}개 1:1)"
+                )
+            console.print(f"[bold cyan]▶ Sprint {sprint_num} 실행 모드: {mode_label}[/bold cyan]")
+            notifier.notify(
+                "info",
+                f"Sprint {sprint_num} 실행 모드: {mode_label}",
+                project_name=paths.project_name,
+            )
+
             if len(branch_specs) == 1:
                 # ============================================================
                 # === 단일 분기 모드 (회귀 0, 기존 동작 그대로) ===============
@@ -2066,6 +2107,30 @@ def run_cycle(
                             result = ev.run_evaluate(config, paths, notifier=notifier)
                             info["stdout"] = result.stdout or ""
                             report_subprocess(result, f"evaluator sprint-{sprint_num}", console)
+                        # 1차 cold start exit=1 자동 1회 재시도. evaluator subprocess가
+                        # 첫 turn에 일찍 죽는 패턴(returncode != 0 + 짧은 stdout) — claude
+                        # CLI cold start로 추정. 정상 evaluator는 보통 5K+ chars 출력.
+                        if result.returncode != 0 and len(result.stdout or "") < 1000:
+                            console.print(
+                                f"[yellow]Sprint {sprint_num} evaluator 1차 실패 (cold start 패턴, "
+                                f"stdout={len(result.stdout or '')} chars, exit={result.returncode}) "
+                                f"— 자동 1회 재시도[/yellow]"
+                            )
+                            notifier.notify(
+                                "info",
+                                f"Sprint {sprint_num} evaluator 1차 실패 — 자동 1회 재시도 (cold start 회피)",
+                                project_name=paths.project_name,
+                            )
+                            time.sleep(2)
+                            with sprint_tracer.span("evaluator-cold-retry") as info:
+                                info["input"] = (
+                                    f"[evaluator/sprint-{sprint_num}] auto retry after cold start exit=1"
+                                )
+                                result = ev.run_evaluate(config, paths, notifier=notifier)
+                                info["stdout"] = result.stdout or ""
+                                report_subprocess(
+                                    result, f"evaluator-cold-retry sprint-{sprint_num}", console
+                                )
                     except Exception as e:
                         notifier.notify("error", f"Evaluator 실행 중 예외: {e}", project_name=paths.project_name)
                     cp.advance(Phase.EVALUATING_DONE, f"evaluation complete (sprint {sprint_num})")

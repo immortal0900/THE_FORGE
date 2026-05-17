@@ -269,6 +269,26 @@ def status(root: Optional[Path] = typer.Option(None, "--root", "-r")) -> None:
     table.add_row("telegram_enabled", str(config.telegram_enabled))
     table.add_row("slack_enabled", str(config.slack_enabled))
     table.add_row("langfuse_enabled", str(config.langfuse_enabled))
+    # 실행 모드 표시 (단일 직렬 vs 병렬 N — branch 표기 혼동 방지)
+    try:
+        from .contract import parse_branches
+
+        sct = (
+            paths.sprint_contract.read_text(encoding="utf-8", errors="replace")
+            if paths.sprint_contract.exists()
+            else ""
+        )
+        _specs = parse_branches(sct)
+        if len(_specs) == 1 and _specs[0].id == "trunk":
+            _mode = "단일 직렬 (LLM 세션 1)"
+        elif len(_specs) == 1:
+            _mode = f"단일 직렬 (LLM 세션 1, branch={_specs[0].id})"
+        else:
+            _n = min(len(_specs), config.max_parallel_branches)
+            _mode = f"병렬 {_n} worktree (LLM 세션 {_n}개 동시)"
+    except Exception:
+        _mode = "(미정 — contract 미생성 또는 파싱 실패)"
+    table.add_row("실행 모드", _mode)
     for p in (paths.spec, paths.plan_review, paths.sprint_contract, paths.qa_report):
         table.add_row(p.name, "OK" if p.exists() else "-")
 
