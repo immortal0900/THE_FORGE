@@ -18,6 +18,7 @@ from .agents import planner as pl
 from .agents.runner import run_agent_sync
 from .checkpoint import BranchState, Checkpoint, Phase
 from .config import ForgeConfig, ProjectPaths
+from .contract import BranchSpec, parse_branches
 from .cost_tracker import SprintTracer, parse_cost_log
 from .notifier import NotifierAdapter, get_notifier
 
