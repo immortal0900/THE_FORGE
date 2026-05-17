@@ -272,6 +272,36 @@ def test_build_branch_capability_card_essence_chips_fallback_when_no_essence():
     assert ":" not in chip_text.split("관련 본질:")[-1].split("\n")[0].replace("관련 본질:", "")
 
 
+def test_build_branch_capability_intro_shows_essence_diagnostic():
+    """essence 로드 실패 진단 메시지가 주어지면 인트로 카드에 명시 노출되어야 한다.
+
+    회귀 방지: silent fail 금지. 사용자가 chip이 비어 있는 이유를 카드 안에서
+    즉시 파악할 수 있어야 함.
+    """
+    diag = "spec.md YAML 파싱 실패: expected <block end>, but found ','"
+    blocks = build_branch_capability_intro_blocks(
+        sprint_num=1, total=3, essence_diagnostic=diag
+    )
+    section_texts = "\n".join(
+        b["text"]["text"] for b in blocks if b.get("type") == "section"
+    )
+    assert "본질 로드 경고" in section_texts
+    assert "expected <block end>" in section_texts
+
+
+def test_build_branch_capability_intro_no_warning_when_essence_ok():
+    """essence_diagnostic=None이면 경고 섹션이 추가되지 않는다 (silent 정상)."""
+    blocks = build_branch_capability_intro_blocks(
+        sprint_num=1, total=3, essence_diagnostic=None
+    )
+    section_texts = "\n".join(
+        b["text"].get("text", "")
+        for b in blocks
+        if b.get("type") == "section"
+    )
+    assert "본질 로드 경고" not in section_texts
+
+
 def test_build_branch_capability_card_chip_truncates_long_statement():
     """statement가 40자 넘으면 말줄임표로 잘림 (chip 길이 제어)."""
     from forge.judgment import Axiom, EssenceSource

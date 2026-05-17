@@ -92,14 +92,26 @@ _YAML_FENCE_RE = re.compile(r"```ya?ml\s*\n(.*?)\n```", re.DOTALL)
 def parse_essence(path: Path) -> Optional[EssenceSource]:
     """essence 파일 파싱.
 
-    지원 형식:
-    - .yaml / .yml : 파일 전체를 YAML로 해석
-    - .md : frontmatter (--- ... ---) 또는 첫 ```yaml fenced code 안에서 YAML 추출
+    실패 (파일 없음 / 파싱 오류 / axioms 비어있음) 시 None. 진단 메시지가
+    필요한 호출자는 `try_parse_essence`를 직접 호출하라.
+    """
+    source, _err = try_parse_essence(path)
+    return source
 
-    실패 (파일 없음 / 파싱 오류 / axioms 비어있음) 시 None.
+
+def try_parse_essence(path: Path) -> tuple[Optional[EssenceSource], Optional[str]]:
+    """essence 파일 파싱 + 진단 메시지 반환.
+
+    반환: (EssenceSource | None, error_message | None)
+    - 성공: (source, None)
+    - 실패: (None, "왜 실패했는지 사람 읽을 수 있는 한 줄")
+
+    silent fail 금지 — 호출자가 사용자에게 진단을 전달할 수 있도록.
+    예: spec.md frontmatter의 falsifiable_by 줄에 콤마+따옴표 나열로
+    `expected <block end>, but found ','` 같은 YAML 문법 깨짐을 즉시 노출.
     """
     if not path.exists():
-        return None
+        return None, f"파일 없음: {path}"
     text = path.read_text(encoding="utf-8", errors="replace")
 
     yaml_text: Optional[str] = None
@@ -115,27 +127,40 @@ def parse_essence(path: Path) -> Optional[EssenceSource]:
             if fm:
                 yaml_text = fm.group(1)
     else:
-        return None
+        return None, f"지원 안 하는 확장자: {suffix} ({path.name})"
 
     if not yaml_text:
-        return None
+        return None, (
+            f"{path.name}에 essence 정의를 찾지 못함 "
+            f"(frontmatter 또는 ```yaml fenced 코드 없음)"
+        )
     try:
         data = yaml.safe_load(yaml_text)
-    except yaml.YAMLError:
-        return None
+    except yaml.YAMLError as exc:
+        return None, (
+            f"{path.name} YAML 파싱 실패: {exc}. "
+            f"multiline 값은 literal block(|)으로 적어야 합니다 "
+            f"(예: `falsifiable_by: |\\n  여러 줄 텍스트`)"
+        )
     if not isinstance(data, dict):
-        return None
+        return None, f"{path.name} YAML 루트가 매핑이 아님 (type={type(data).__name__})"
 
     raw_axioms = data.get("essence_axioms") or data.get("axioms")
     if not isinstance(raw_axioms, list):
-        return None
+        return None, (
+            f"{path.name}에 essence_axioms 또는 axioms 키가 없음 "
+            f"(있는 키: {list(data.keys())})"
+        )
 
     axioms: list[Axiom] = []
+    skipped: list[str] = []
     for i, item in enumerate(raw_axioms):
         if not isinstance(item, dict):
+            skipped.append(f"#{i} 매핑 아님")
             continue
         statement = str(item.get("statement", "")).strip()
         if not statement:
+            skipped.append(f"#{i} statement 빔")
             continue
         axioms.append(
             Axiom(
@@ -148,13 +173,19 @@ def parse_essence(path: Path) -> Optional[EssenceSource]:
         )
 
     if not axioms:
-        return None
+        return None, (
+            f"{path.name}에 유효한 axiom 0개. skipped={skipped}"
+        )
 
-    return EssenceSource(
+    source = EssenceSource(
         source=str(path),
         imported_at=datetime.fromtimestamp(path.stat().st_mtime).isoformat(timespec="seconds"),
         axioms=axioms,
     )
+    # 부분 skip은 경고로 알리되 성공으로 반환
+    if skipped:
+        return source, f"일부 axiom skip: {', '.join(skipped)}"
+    return source, None
 
 
 # ── spec.md 인용 ────────────────────────────────────────────────────────────
@@ -243,11 +274,34 @@ def load_essence_for_project(
     """프로젝트에 본질 파일 있으면 파싱, 없으면 None.
 
     orchestrator의 planning 진입 시 사용하는 단일 진입점.
+    진단 메시지가 필요하면 `try_load_essence_for_project` 사용.
+    """
+    source, _err = try_load_essence_for_project(project_root, hint_path)
+    return source
+
+
+def try_load_essence_for_project(
+    project_root: Path,
+    hint_path: Optional[str] = None,
+) -> tuple[Optional[EssenceSource], Optional[str]]:
+    """프로젝트의 essence 로드 + 진단 메시지.
+
+    반환: (EssenceSource | None, error_message | None)
+    - 성공: (source, None)
+    - 표준 후보 모두 없음: (None, "essence 파일 없음 — docs/essence.md 등 확인")
+    - 파일은 있지만 파싱 실패: (None, "spec.md YAML 파싱 실패: ...")
+
+    silent fail 금지. Slack 카드 발송 시 None이면 인트로/진단 카드에 메시지
+    노출 → 사용자가 chip이 비어 있는 이유 즉시 파악.
     """
     path = find_essence_file(project_root, hint_path)
     if path is None:
-        return None
-    return parse_essence(path)
+        return None, (
+            f"essence 파일 없음 — docs/essence.md, docs/essence.yaml, "
+            f"artifacts/essence-axioms.yaml, artifacts/spec.md(frontmatter) 중 "
+            f"하나를 만드세요 (검색 루트: {project_root})"
+        )
+    return try_parse_essence(path)
 
 
 # ── 큰 그림 2: Verdict Card 데이터 ──────────────────────────────────────────
@@ -585,9 +639,16 @@ def _proximity_icon(score: int) -> str:
 def build_branch_capability_intro_blocks(
     sprint_num: int,
     total: int,
+    *,
+    essence_diagnostic: Optional[str] = None,
 ) -> list[dict]:
-    """분기 카드 N장 발송 전 인트로 1장. 'Sprint N 분기 승인 M개'."""
-    return [
+    """분기 카드 N장 발송 전 인트로 1장. 'Sprint N 분기 승인 M개'.
+
+    essence_diagnostic: essence 로드 실패/부분 skip 시 사용자에게 노출할
+    한 줄 진단. None이면 평소 안내문만. 있으면 본질 chip이 왜 비어 있는지
+    카드 인트로에 즉시 표시 — silent fail 방지.
+    """
+    blocks: list[dict] = [
         {
             "type": "header",
             "text": {
@@ -609,6 +670,21 @@ def build_branch_capability_intro_blocks(
             ],
         },
     ]
+    if essence_diagnostic:
+        blocks.append(
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": (
+                        f"⚠️ *본질 로드 경고*\n"
+                        f"{essence_diagnostic[:1800]}\n\n"
+                        "_원인: 아래 chip이 `[a1: 본질 내용]`이 아니라 `[a1]`만 보이는 이유._"
+                    ),
+                },
+            }
+        )
+    return blocks
 
 
 def _format_essence_chips(

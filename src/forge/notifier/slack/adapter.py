@@ -348,8 +348,8 @@ class SlackNotifier(NotifierAdapter):
 
         from ...judgment import (
             build_verdict_card_blocks,
-            load_essence_for_project,
             parse_axiom_verdicts,
+            try_load_essence_for_project,
         )
 
         verdicts = parse_axiom_verdicts(source_path)
@@ -357,15 +357,19 @@ class SlackNotifier(NotifierAdapter):
             return False
 
         # essence 로드: ③ "왜 이 본질이 필요한가" 섹션에 rationale을 결합.
-        # 없으면 measurements만 노출 (silent 폴백).
+        # 실패 시 카드 맨 위에 진단 한 줄을 박아 사용자가 즉시 원인 파악.
         essence = None
+        essence_diag: Optional[str] = None
         try:
-            essence = load_essence_for_project(
+            essence, essence_diag = try_load_essence_for_project(
                 self._paths.project_root,
                 self._config.essence_source_path or None,
             )
         except Exception as e:
-            logger.debug("Verdict Card essence 로드 skip: %s", e)
+            essence_diag = f"essence 로드 예외: {type(e).__name__}: {e}"
+            logger.warning("Verdict Card essence 로드 예외: %s", e)
+        if essence is None and essence_diag:
+            logger.warning("Verdict Card essence 미로드: %s", essence_diag)
 
         card_blocks = build_verdict_card_blocks(
             verdicts,
@@ -374,6 +378,23 @@ class SlackNotifier(NotifierAdapter):
             cost_estimate=cost_estimate,
             essence=essence,
         )
+        if essence is None and essence_diag:
+            # header 다음(index 1)에 끼움. 사용자가 카드 정체(header)를 먼저 인식한 후
+            # 진단 메시지를 보도록 — 기존 테스트의 blocks[0] == header 단언과도 호환.
+            insert_at = 1 if card_blocks and card_blocks[0].get("type") == "header" else 0
+            card_blocks.insert(
+                insert_at,
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": (
+                            f"⚠️ *본질 로드 경고*\n{essence_diag[:1800]}\n"
+                            "_③ 섹션의 rationale 인용이 비어 있는 이유._"
+                        ),
+                    },
+                },
+            )
         if not card_blocks:
             return False
 
@@ -436,29 +457,35 @@ class SlackNotifier(NotifierAdapter):
             BranchCapability,
             build_branch_capability_card_blocks,
             build_branch_capability_intro_blocks,
-            load_essence_for_project,
             parse_branch_capabilities,
+            try_load_essence_for_project,
         )
 
         caps: list[BranchCapability] = parse_branch_capabilities(source_path)
         if not caps:
             return 0
 
-        # essence 로드: 본질 chip을 `[a1: 본질 내용]` 양식으로 노출하기 위함.
-        # 없으면 빌더가 `[a1]`로 폴백 (silent).
+        # essence 로드: chip을 `[a1: 본질 내용]` 양식으로 풀어 노출하기 위함.
+        # 실패 시 에러 메시지를 인트로 카드에 명시 노출 (silent fail 금지).
         essence = None
+        essence_diag: Optional[str] = None
         try:
-            essence = load_essence_for_project(
+            essence, essence_diag = try_load_essence_for_project(
                 self._paths.project_root,
                 self._config.essence_source_path or None,
             )
         except Exception as e:
-            logger.debug("Branch Capability essence 로드 skip: %s", e)
+            essence_diag = f"essence 로드 예외: {type(e).__name__}: {e}"
+            logger.warning("Branch Capability essence 로드 예외: %s", e)
+        if essence is None and essence_diag:
+            logger.warning("Branch Capability essence 미로드: %s", essence_diag)
 
         display_project = project_name or self._project_name
         total = len(caps)
 
-        intro_blocks = build_branch_capability_intro_blocks(sprint_num, total)
+        intro_blocks = build_branch_capability_intro_blocks(
+            sprint_num, total, essence_diagnostic=essence_diag if essence is None else None,
+        )
         intro_fallback = (
             f"🎯 [{display_project}] Sprint {sprint_num} 분기 승인 {total}개"
         )

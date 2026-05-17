@@ -526,6 +526,81 @@ def test_build_card_blocks_section3_without_essence_falls_back_to_measurements()
     assert "spec §3에 정량 임계 명시" in section_texts
 
 
+def test_try_parse_essence_reports_yaml_error_with_message(tmp_path):
+    """spec.md frontmatter의 falsifiable_by에 콤마+따옴표 나열로 YAML이 깨지면
+    silent None이 아니라 진단 메시지가 함께 반환되어야 한다.
+
+    실제 사용자 사례(2026-05-17): THE_FORGE_TEST 프로젝트에서 같은 함정으로
+    카드 chip이 비어 표시됨. 진단 메시지가 카드에 노출되어야 즉시 원인 파악 가능.
+    """
+    from forge.judgment import try_parse_essence
+
+    p = tmp_path / "spec.md"
+    p.write_text(
+        "---\n"
+        "essence_axioms:\n"
+        "  - id: a1\n"
+        '    statement: test\n'
+        '    falsifiable_by: "A", "B", "C" 중 하나라도 위반\n'  # YAML 깨짐
+        "    weight: high\n"
+        "---\n"
+        "body\n",
+        encoding="utf-8",
+    )
+    source, err = try_parse_essence(p)
+    assert source is None
+    assert err is not None
+    assert "YAML 파싱 실패" in err
+    assert "literal block" in err  # 가이드 메시지 포함
+
+
+def test_try_parse_essence_returns_none_message_when_axioms_missing(tmp_path):
+    from forge.judgment import try_parse_essence
+
+    p = tmp_path / "spec.md"
+    p.write_text(
+        "---\n"
+        "some_other_key: value\n"
+        "---\n",
+        encoding="utf-8",
+    )
+    source, err = try_parse_essence(p)
+    assert source is None
+    assert err is not None
+    assert "essence_axioms" in err or "axioms" in err
+
+
+def test_try_load_essence_for_project_reports_missing_file(tmp_path):
+    from forge.judgment import try_load_essence_for_project
+
+    source, err = try_load_essence_for_project(tmp_path)
+    assert source is None
+    assert err is not None
+    assert "essence 파일 없음" in err
+
+
+def test_try_parse_essence_success_returns_no_error(tmp_path):
+    from forge.judgment import try_parse_essence
+
+    p = tmp_path / "spec.md"
+    p.write_text(
+        "---\n"
+        "essence_axioms:\n"
+        "  - id: a1\n"
+        "    statement: 오프라인 동작\n"
+        "    rationale: |\n"
+        "      비행기에서 사용\n"
+        "    weight: critical\n"
+        "---\n",
+        encoding="utf-8",
+    )
+    source, err = try_parse_essence(p)
+    assert source is not None
+    assert err is None
+    assert len(source.axioms) == 1
+    assert source.axioms[0].id == "a1"
+
+
 def test_build_card_blocks_no_old_flat_labels():
     """옛 평면 라벨('• *검사 방법*:' 같은 줄)이 카드 본문에 그대로 나오면 안 된다.
 
