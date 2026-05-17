@@ -3,15 +3,18 @@ from forge.config import ForgeConfig, ProjectPaths
 
 
 def test_defaults_when_no_toml(tmp_path, monkeypatch):
+    # setenv("")로 빈 값을 박아 .env 파일 자동 로드를 무력화 (delenv만으로는
+    # pydantic-settings의 .env 우선순위를 못 막는다 — 사전 회귀 진단 결과).
     for var in (
         "FORGE_TELEGRAM_BOT_TOKEN",
         "FORGE_TELEGRAM_CHAT_ID",
         "FORGE_LANGFUSE_PUBLIC_KEY",
         "FORGE_LANGFUSE_SECRET_KEY",
     ):
-        monkeypatch.delenv(var, raising=False)
+        monkeypatch.setenv(var, "")
     config = ForgeConfig.load(tmp_path)
-    assert config.max_sprint_minutes == 180
+    # default 500 — verdict-heavy planner 세션에 맞춰 0e4a6b9에서 상향 (180 → 500).
+    assert config.max_sprint_minutes == 500
     assert config.telegram_enabled is False
     assert config.langfuse_enabled is False
     assert config.playwright_enabled is True
@@ -24,7 +27,7 @@ def test_load_from_toml(tmp_path, monkeypatch):
         "FORGE_LANGFUSE_PUBLIC_KEY",
         "FORGE_LANGFUSE_SECRET_KEY",
     ):
-        monkeypatch.delenv(var, raising=False)
+        monkeypatch.setenv(var, "")
     (tmp_path / "forge.toml").write_text(
         """
 [forge]
@@ -111,7 +114,7 @@ def test_load_from_pyproject_toml(tmp_path, monkeypatch):
         "FORGE_LANGFUSE_PUBLIC_KEY",
         "FORGE_LANGFUSE_SECRET_KEY",
     ):
-        monkeypatch.delenv(var, raising=False)
+        monkeypatch.setenv(var, "")
     (tmp_path / "pyproject.toml").write_text(
         """
 [tool.forge]
@@ -135,7 +138,7 @@ def test_forge_toml_overrides_pyproject(tmp_path, monkeypatch):
         "FORGE_LANGFUSE_PUBLIC_KEY",
         "FORGE_LANGFUSE_SECRET_KEY",
     ):
-        monkeypatch.delenv(var, raising=False)
+        monkeypatch.setenv(var, "")
     (tmp_path / "pyproject.toml").write_text(
         """
 [tool.forge]
@@ -164,10 +167,11 @@ def test_new_safety_fields_defaults(tmp_path, monkeypatch):
         "FORGE_LANGFUSE_PUBLIC_KEY",
         "FORGE_LANGFUSE_SECRET_KEY",
     ):
-        monkeypatch.delenv(var, raising=False)
+        monkeypatch.setenv(var, "")
     config = ForgeConfig.load(tmp_path)
     assert config.max_total_minutes == 1440
-    assert config.max_consecutive_fails == 3
+    # default 0 — 475d316에서 변경 (3 → 0). 0이면 자동 중단 비활성, 사용자가 /stop으로 직접 중단.
+    assert config.max_consecutive_fails == 0
     assert config.max_total_sprints == 20
 
 
