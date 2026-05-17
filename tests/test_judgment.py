@@ -450,3 +450,106 @@ def test_build_card_blocks_includes_recommendation_block():
     assert "a1만 부분 재실행" in last
     assert "신뢰도 60→90 회복 예상" in last
     assert "+12분" in last
+
+
+def test_build_card_blocks_has_4_section_labels():
+    """Verdict Card는 본질당 ① ~ ④ 4섹션 라벨이 모두 노출되어야 한다.
+
+    회귀 방지: 누가 4섹션 양식을 옛 '검사 방법/실측/근거' 평면 리스트로 되돌리면
+    이 테스트가 즉시 잡음. 사용자 결정(2026-05-17): Verdict Card도 Branch
+    Capability Card와 동일한 4섹션 양식으로 통일.
+    """
+    blocks = build_verdict_card_blocks(
+        [
+            _v(
+                "a1",
+                "VERIFIED",
+                95,
+                statement="오프라인 동작",
+                inspection_method="네트워크 차단 후 실행",
+                measurements="12/12 통과",
+                evidence="src/net.py:42",
+                user_impact="비행기 사용자 영향",
+                recommend_action="accept",
+            )
+        ]
+    )
+    section_texts = "\n".join(
+        b["text"]["text"] for b in blocks if b.get("type") == "section"
+    )
+    assert "① 본질 근접도" in section_texts
+    assert "② 무슨 본질" in section_texts
+    assert "③ 왜 이 본질이 필요한가" in section_texts
+    assert "④ 이게 깨지면" in section_texts
+
+
+def test_build_card_blocks_merges_essence_rationale_into_section3():
+    """essence 인자가 주어지면 ③ '왜 필요한가' 섹션에 Axiom.rationale이 결합된다.
+
+    이게 없으면 ③은 measurements만 보여줘서 '왜 필요한 본질인지'가 비어 보임.
+    """
+    essence = EssenceSource(
+        source="docs/essence.md",
+        imported_at="2026-05-17",
+        axioms=[
+            Axiom(
+                id="a2",
+                statement="1초 내 처리",
+                rationale="사용자가 '느리다' 인식하는 임계가 1초",
+                falsifiable_by="100MB 처리 시간 측정",
+                weight="critical",
+            )
+        ],
+    )
+    blocks = build_verdict_card_blocks(
+        [_v("a2", "PARTIAL", 60, measurements="10MB OK")],
+        essence=essence,
+    )
+    section_texts = "\n".join(
+        b["text"]["text"] for b in blocks if b.get("type") == "section"
+    )
+    # ③ 섹션 본문에 rationale 인용이 들어가야 함
+    assert "사용자가 '느리다' 인식하는 임계가 1초" in section_texts
+    # measurements는 그대로 유지되어야 함 (정보 손실 0)
+    assert "10MB OK" in section_texts
+
+
+def test_build_card_blocks_section3_without_essence_falls_back_to_measurements():
+    """essence 없으면 ③ 섹션은 measurements만으로 동작 (silent 폴백)."""
+    blocks = build_verdict_card_blocks(
+        [_v("a1", "VERIFIED", 95, measurements="spec §3에 정량 임계 명시")],
+        essence=None,
+    )
+    section_texts = "\n".join(
+        b["text"]["text"] for b in blocks if b.get("type") == "section"
+    )
+    assert "spec §3에 정량 임계 명시" in section_texts
+
+
+def test_build_card_blocks_no_old_flat_labels():
+    """옛 평면 라벨('• *검사 방법*:' 같은 줄)이 카드 본문에 그대로 나오면 안 된다.
+
+    회귀 방지: 사용자가 4섹션 양식을 결정했는데 누가 옛 줄을 그대로 추가하면
+    카드에 두 양식이 섞임. 옛 라벨은 ① ~ ④ 안의 *사람 친화 sub-라벨*로만 등장해야 함.
+    """
+    blocks = build_verdict_card_blocks(
+        [
+            _v(
+                "a1",
+                "VERIFIED",
+                95,
+                inspection_method="X",
+                measurements="Y",
+                evidence="Z",
+                user_impact="W",
+            )
+        ]
+    )
+    text = "\n".join(
+        b["text"]["text"] for b in blocks if b.get("type") == "section"
+    )
+    # 옛 평면 양식은 줄 머리에 "  • *검사 방법*: " 식으로 나왔음.
+    # 새 양식은 ① 본질 근접도 안에 "  • _검사 방법_: X" 같은 sub-bullet으로만 등장.
+    assert "*검사 방법*" not in text  # bold 라벨로는 노출 X
+    assert "*실측*" not in text
+    assert "*사용자 영향*" not in text

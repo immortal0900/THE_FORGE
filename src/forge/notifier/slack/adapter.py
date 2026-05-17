@@ -346,17 +346,33 @@ class SlackNotifier(NotifierAdapter):
         if not self.enabled or self._web is None:
             return False
 
-        from ...judgment import build_verdict_card_blocks, parse_axiom_verdicts
+        from ...judgment import (
+            build_verdict_card_blocks,
+            load_essence_for_project,
+            parse_axiom_verdicts,
+        )
 
         verdicts = parse_axiom_verdicts(source_path)
         if not verdicts:
             return False
+
+        # essence 로드: ③ "왜 이 본질이 필요한가" 섹션에 rationale을 결합.
+        # 없으면 measurements만 노출 (silent 폴백).
+        essence = None
+        try:
+            essence = load_essence_for_project(
+                self._paths.project_root,
+                self._config.essence_source_path or None,
+            )
+        except Exception as e:
+            logger.debug("Verdict Card essence 로드 skip: %s", e)
 
         card_blocks = build_verdict_card_blocks(
             verdicts,
             recommendation=recommendation,
             recommendation_reason=recommendation_reason,
             cost_estimate=cost_estimate,
+            essence=essence,
         )
         if not card_blocks:
             return False
@@ -420,12 +436,24 @@ class SlackNotifier(NotifierAdapter):
             BranchCapability,
             build_branch_capability_card_blocks,
             build_branch_capability_intro_blocks,
+            load_essence_for_project,
             parse_branch_capabilities,
         )
 
         caps: list[BranchCapability] = parse_branch_capabilities(source_path)
         if not caps:
             return 0
+
+        # essence 로드: 본질 chip을 `[a1: 본질 내용]` 양식으로 노출하기 위함.
+        # 없으면 빌더가 `[a1]`로 폴백 (silent).
+        essence = None
+        try:
+            essence = load_essence_for_project(
+                self._paths.project_root,
+                self._config.essence_source_path or None,
+            )
+        except Exception as e:
+            logger.debug("Branch Capability essence 로드 skip: %s", e)
 
         display_project = project_name or self._project_name
         total = len(caps)
@@ -440,7 +468,7 @@ class SlackNotifier(NotifierAdapter):
         sent = 0
         for idx, cap in enumerate(caps, start=1):
             blocks = build_branch_capability_card_blocks(
-                cap, sprint_num=sprint_num, idx=idx, total=total
+                cap, sprint_num=sprint_num, idx=idx, total=total, essence=essence,
             )
             action_elements = [
                 {

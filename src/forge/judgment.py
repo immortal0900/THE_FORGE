@@ -356,19 +356,36 @@ def build_verdict_card_blocks(
     recommendation: str = "",
     recommendation_reason: str = "",
     cost_estimate: str = "",
+    essence: Optional["EssenceSource"] = None,
 ) -> list[dict]:
-    """Slack Block Kit Verdict Card 빌더.
+    """Slack Block Kit Verdict Card 빌더 (4섹션 양식).
 
-    카드 구조 (docs/plan-judgment-velocity.md 큰 그림 2 명세 따름):
+    카드 구조: 본질당 4섹션으로 사용자가 8-10초에 판단 가능하게 정리.
     - header: 본질 부합도 (아이콘 분포 + N/M 카운트)
     - divider
-    - 각 axiom: 본문에 본질·검사방법·실측·근거·반박·사용자영향 (사용자 가치 판단용)
+    - 각 본질당 1블록:
+        헤더(아이콘 + id + statement + confidence + 게이지)
+        ① 본질 근접도 수치+근거 (confidence + evidence 인용 + inspection_method)
+        ② 무슨 본질 (statement, 1줄)
+        ③ 왜 이 본질이 필요한가 (essence.rationale 있으면 우선 + measurements)
+        ④ 이게 깨지면 (user_impact + counter_hypothesis 반박)
+        💡 LLM 추천: recommend_action
     - divider
-    - LLM 추천 + 비용 추정 (있을 때)
+    - 카드 전체 추천(planner/evaluator가 넘긴 recommendation) + 비용
+
+    essence 인자: spec.md frontmatter의 essence_axioms 정보 (rationale 포함)를
+    카드에 함께 노출하려면 호출자가 전달. 없으면 ③ 섹션이 measurements만 보여줌.
+    10컬럼 표 양식은 유지 — 이 빌더가 *재구성*만 함.
     """
     blocks: list[dict] = []
     if not verdicts:
         return blocks
+
+    # essence 가 있으면 id → Axiom 매핑 dict로 만들어 rationale을 ③에 결합.
+    essence_by_id: dict[str, "Axiom"] = {}
+    if essence is not None:
+        for ax in essence.axioms:
+            essence_by_id[ax.id] = ax
 
     counts: dict[str, int] = {"VERIFIED": 0, "PARTIAL": 0, "MISSING": 0}
     icons = ""
@@ -388,35 +405,65 @@ def build_verdict_card_blocks(
     for v in verdicts:
         icon = _VERDICT_ICON.get(v.verdict, "❓")
         bar = _confidence_bar(v.confidence)
-        lines = [
-            f"{icon} *{v.id}*  {v.statement}    *{v.confidence}%*  `{bar}`",
-        ]
-        if v.inspection_method:
-            lines.append(f"  • *검사 방법*: {v.inspection_method}")
-        if v.measurements:
-            lines.append(f"  • *실측*: {v.measurements}")
+        # 본질 헤더 한 줄 (id + statement + verdict + confidence + 게이지)
+        head_line = (
+            f"{icon} *{v.id}*  {v.statement}    *{v.confidence}%*  `{bar}`"
+        )
+
+        # ① 본질 근접도 수치+근거
+        prox_lines = [f"*① 본질 근접도*  {v.confidence}%  `{bar}`"]
         if v.evidence:
-            lines.append(f"  • *근거*: {v.evidence}")
-        # 반박은 "없음"이라도 표기 (silent 금지)
-        lines.append(f"  • *반박*: {v.counter_hypothesis or '없음'}")
+            prox_lines.append(f"  • _근거 (직접 인용)_: {v.evidence}")
+        if v.inspection_method:
+            prox_lines.append(f"  • _검사 방법_: {v.inspection_method}")
+        if not v.evidence and not v.inspection_method:
+            prox_lines.append("  • _(planner/evaluator가 근거를 채우지 않음)_")
+
+        # ② 무슨 본질
+        what_lines = ["*② 무슨 본질*", f"  {v.statement or '_(빈 항목)_'}"]
+
+        # ③ 왜 이 본질이 필요한가 (essence.rationale 우선 + measurements 결합)
+        why_lines = ["*③ 왜 이 본질이 필요한가*"]
+        ax = essence_by_id.get(v.id)
+        if ax is not None and ax.rationale:
+            why_lines.append(f"  • _이유_: {ax.rationale}")
+        if v.measurements:
+            why_lines.append(f"  • _spec/코드 반영_: {v.measurements}")
+        if (ax is None or not ax.rationale) and not v.measurements:
+            why_lines.append("  • _(rationale/measurements 모두 빔)_")
+
+        # ④ 이게 깨지면
+        impact_lines = ["*④ 이게 깨지면*"]
         if v.user_impact:
-            lines.append(f"  • *사용자 영향*: {v.user_impact}")
+            impact_lines.append(f"  • _사용자 영향_: {v.user_impact}")
+        # 반박은 "없음"이라도 표기 (silent 금지)
+        impact_lines.append(
+            f"  • _반박 시나리오_: {v.counter_hypothesis or '없음'}"
+        )
+
+        sections = [
+            head_line,
+            "\n".join(prox_lines),
+            "\n".join(what_lines),
+            "\n".join(why_lines),
+            "\n".join(impact_lines),
+        ]
         if v.recommend_action:
-            lines.append(f"  • *추천 액션*: `{v.recommend_action}`")
-        text = "\n".join(lines)
+            sections.append(f"💡 *LLM 추천*: `{v.recommend_action}`")
+        text = "\n\n".join(sections)
+
         blocks.append(
             {
                 "type": "section",
                 "text": {"type": "mrkdwn", "text": text[:2900]},
             }
         )
-
-    blocks.append({"type": "divider"})
+        blocks.append({"type": "divider"})
 
     if recommendation or cost_estimate or recommendation_reason:
         parts: list[str] = []
         if recommendation:
-            parts.append(f"💡 *LLM 추천*: {recommendation}")
+            parts.append(f"💡 *LLM 추천 (카드 전체)*: {recommendation}")
         if recommendation_reason:
             parts.append(f"   _왜_: {recommendation_reason}")
         if cost_estimate:
@@ -564,20 +611,55 @@ def build_branch_capability_intro_blocks(
     ]
 
 
+def _format_essence_chips(
+    ids: list[str],
+    essence: Optional["EssenceSource"],
+    *,
+    max_statement_chars: int = 40,
+) -> str:
+    """본질 id 목록을 `[a1: 본질 내용]` chip 형태로 포맷.
+
+    essence가 있으면 statement를 함께 노출하여 사용자가 카드에서 spec.md를
+    들춰보지 않아도 id가 무슨 본질인지 즉시 파악. essence가 없거나 해당 id가
+    essence에 없으면 그냥 `[a1]`로 폴백.
+    """
+    if not ids:
+        return "(매핑 없음)"
+    by_id: dict[str, "Axiom"] = {}
+    if essence is not None:
+        for ax in essence.axioms:
+            by_id[ax.id] = ax
+    chips: list[str] = []
+    for aid in ids:
+        ax = by_id.get(aid)
+        if ax is None or not ax.statement:
+            chips.append(f"[{aid}]")
+            continue
+        stmt = ax.statement.strip()
+        if len(stmt) > max_statement_chars:
+            stmt = stmt[: max_statement_chars - 1] + "…"
+        chips.append(f"[{aid}: {stmt}]")
+    return " ".join(chips)
+
+
 def build_branch_capability_card_blocks(
     cap: BranchCapability,
     *,
     sprint_num: int,
     idx: int,
     total: int,
+    essence: Optional["EssenceSource"] = None,
 ) -> list[dict]:
     """분기 1개 카드 (4섹션 + task 체크리스트 + 액션 버튼).
 
     Slack Block Kit 구조. 액션 버튼 value는 orchestrator 헬퍼가 project_name
     prefix와 합쳐 `{project}::branch_cap::{branch_id}::{action}` 형태로 만든다.
+
+    essence 인자: 매핑된 본질 id를 `[a1: 본질 내용]` chip으로 풀어 노출 (없으면
+    `[a1]` 폴백). 사용자가 카드만 보고 어느 본질인지 즉시 알 수 있게 함.
     """
     icon = _proximity_icon(max(cap.score_llm, cap.score_floor))
-    essence_chips = " ".join(f"[{e}]" for e in cap.related_essence) or "(매핑 없음)"
+    essence_chips = _format_essence_chips(cap.related_essence, essence)
 
     blocks: list[dict] = []
     blocks.append(
@@ -619,7 +701,9 @@ def build_branch_capability_card_blocks(
         f"  • 규칙 하한 *{cap.score_floor}%*  `{bar_floor}`",
     ]
     if cap.related_essence:
-        proximity_lines.append(f"  • 매핑 본질: {', '.join(cap.related_essence)}")
+        proximity_lines.append(
+            f"  • 매핑 본질: {_format_essence_chips(cap.related_essence, essence)}"
+        )
     if cap.basis:
         proximity_lines.append(f"  • _근거_: {cap.basis}")
     blocks.append(

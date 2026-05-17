@@ -211,6 +211,95 @@ def test_build_branch_capability_intro_has_title_with_sprint_and_count():
     assert "4" in header_text
 
 
+def test_build_branch_capability_card_essence_chips_inline_statement():
+    """essence를 넘기면 본질 chip이 [a1: 본질 내용] 양식으로 노출되어야 한다.
+
+    회귀 방지: 누가 chip 양식을 `[a1]`만으로 되돌리면 즉시 잡힘. 사용자
+    결정(2026-05-17): id만 보면 무슨 본질인지 모르니 statement를 chip에 결합.
+    """
+    from forge.judgment import Axiom, EssenceSource
+
+    essence = EssenceSource(
+        source="docs/essence.md",
+        imported_at="2026-05-17",
+        axioms=[
+            Axiom(id="a1", statement="오프라인에서 동작", weight="critical"),
+            Axiom(id="a4", statement="단순함 우선", weight="high"),
+            Axiom(id="a6", statement="MVP 우선", weight="critical"),
+        ],
+    )
+    cap = BranchCapability(
+        id="branch-1",
+        title="설계 종이에 박기",
+        related_essence=["a1", "a4", "a6"],
+        score_llm=78,
+        score_floor=100,
+    )
+    blocks = build_branch_capability_card_blocks(
+        cap, sprint_num=1, idx=1, total=3, essence=essence
+    )
+    # context block(헤더 직후)에서 chip 양식 확인
+    context_texts = [
+        el["text"]
+        for b in blocks
+        if b.get("type") == "context"
+        for el in b.get("elements", [])
+    ]
+    chip_text = "\n".join(context_texts)
+    assert "[a1: 오프라인에서 동작]" in chip_text
+    assert "[a4: 단순함 우선]" in chip_text
+    assert "[a6: MVP 우선]" in chip_text
+
+
+def test_build_branch_capability_card_essence_chips_fallback_when_no_essence():
+    """essence가 없으면 `[a1]` 폴백 (statement 없이 id만)."""
+    cap = BranchCapability(
+        id="branch-1", related_essence=["a1", "a2"], score_llm=50, score_floor=70
+    )
+    blocks = build_branch_capability_card_blocks(
+        cap, sprint_num=1, idx=1, total=1, essence=None
+    )
+    context_texts = [
+        el["text"]
+        for b in blocks
+        if b.get("type") == "context"
+        for el in b.get("elements", [])
+    ]
+    chip_text = "\n".join(context_texts)
+    assert "[a1]" in chip_text
+    assert "[a2]" in chip_text
+    # statement는 없음 (essence 없으니 폴백)
+    assert ":" not in chip_text.split("관련 본질:")[-1].split("\n")[0].replace("관련 본질:", "")
+
+
+def test_build_branch_capability_card_chip_truncates_long_statement():
+    """statement가 40자 넘으면 말줄임표로 잘림 (chip 길이 제어)."""
+    from forge.judgment import Axiom, EssenceSource
+
+    long_stmt = "이것은 매우 길고 자세한 본질 설명입니다 " * 3  # 60+ chars
+    essence = EssenceSource(
+        source="docs/essence.md",
+        imported_at="2026-05-17",
+        axioms=[Axiom(id="a1", statement=long_stmt, weight="critical")],
+    )
+    cap = BranchCapability(
+        id="branch-1", related_essence=["a1"], score_llm=80, score_floor=100
+    )
+    blocks = build_branch_capability_card_blocks(
+        cap, sprint_num=1, idx=1, total=1, essence=essence
+    )
+    text = "\n".join(
+        el["text"]
+        for b in blocks
+        if b.get("type") == "context"
+        for el in b.get("elements", [])
+    )
+    assert "…" in text  # 말줄임표
+    # chip 자체 길이가 합리적 (40자 + 말줄임 + id + 괄호 정도)
+    chip_part = [seg for seg in text.split() if seg.startswith("[a1:")][0]
+    assert len(chip_part) <= 60
+
+
 # ── parse_sprint_approval ──────────────────────────────────────────────────
 
 
