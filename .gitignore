@@ -36,6 +36,9 @@ artifacts/*
 # forge journal 자동 생성물
 docs/journal.md
 
+# 개인 postmortem/회고 (공유 안 함)
+docs/postmortem-*.md
+
 # 로컬 기획서·메모 (공유 안 함)
 prancy-spinning-peacock.md
 harness-implementation-spec-v1_4.md
