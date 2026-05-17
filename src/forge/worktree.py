@@ -201,6 +201,7 @@ def auto_commit_worktree(
 TRUNK_ARTIFACT_PATHSPECS: tuple[str, ...] = (
     "artifacts/spec.md",
     "artifacts/sprint-contract.md",
+    "artifacts/sprint-capabilities.md",
     "artifacts/plan-review.md",
 )
 

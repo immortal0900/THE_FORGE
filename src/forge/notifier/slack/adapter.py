@@ -75,6 +75,13 @@ ACTION_TO_SIGNAL: dict[str, tuple[str, str]] = {
     "중단": ("stop_signal", "stop"),
 }
 
+# Branch Capability Card / Sprint Approval Card 액션 키
+# Slack receiver는 button value를 `{project}::branch_cap::{branch_id}::{action}`
+# 또는 `{project}::sprint_done::{sprint_num}::{action}`으로 라우팅 — adapter는
+# 해당 액션을 받았을 때 어느 signal 파일에 어떻게 기록할지만 책임진다.
+BRANCH_CAP_ACTIONS = {"keep", "drop", "revise"}
+SPRINT_DONE_ACTIONS = {"approve", "revise"}
+
 
 def _parse_action(raw: str) -> str:
     """`/resume` → `resume`, `resume` → `resume`."""
@@ -141,6 +148,36 @@ class SlackNotifier(NotifierAdapter):
         except OSError as e:
             logger.warning("Slack ASK_USER 응답 저장 실패 (qid=%s): %s", qid, e)
 
+    def _append_branch_cap_signal(self, branch_id: str, action: str) -> None:
+        """Branch Capability Card 결정을 paths.capability_drops에 append.
+
+        포맷 한 줄: `{action}\t{branch_id}\n` (keep / drop / revise).
+        race 보호: 짧은 append 작업이라 OS 차원 atomic append (O_APPEND) 활용.
+        Python의 `open(..., "a")`는 POSIX/Windows 양쪽에서 append를 보장한다.
+        """
+        try:
+            target = self._paths.capability_drops
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with open(target, "a", encoding="utf-8") as fh:
+                fh.write(f"{action}\t{branch_id}\n")
+        except OSError as e:
+            logger.warning(
+                "Slack Branch Capability 신호 저장 실패 (branch=%s action=%s): %s",
+                branch_id, action, e,
+            )
+
+    def _write_sprint_done_signal(self, sprint_num: str) -> None:
+        """Sprint Approval 카드의 approve 신호를 paths.sprint_done_signal에 기록.
+
+        1파일 = 마지막 승인 sprint_num. orchestrator가 폴링 후 unlink.
+        """
+        try:
+            target = self._paths.sprint_done_signal
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(str(sprint_num).strip(), encoding="utf-8")
+        except OSError as e:
+            logger.warning("Slack Sprint Approval 신호 저장 실패 (sprint=%s): %s", sprint_num, e)
+
     def reset_thread(self) -> None:
         """현재 스레드를 잊고 다음 notify에서 새 root를 만든다.
 
@@ -187,7 +224,7 @@ class SlackNotifier(NotifierAdapter):
 
         header_text = "📍 결정 요청"
         if axiom_link:
-            header_text += f"   |   axiom {axiom_link}"
+            header_text += f"   |   본질 {axiom_link}"
 
         blocks: list[dict] = [
             {
@@ -334,7 +371,7 @@ class SlackNotifier(NotifierAdapter):
 
         display_project = project_name or self._project_name
         fallback_text = (
-            f"📋 [{display_project}] Verdict Card ({len(verdicts)} axioms)"
+            f"📋 [{display_project}] 본질 부합도 카드 ({len(verdicts)}개 본질)"
         )
 
         post_kwargs: dict = {
@@ -359,6 +396,190 @@ class SlackNotifier(NotifierAdapter):
                 self._thread_ts = root_ts
                 self._save_thread_ts(root_ts)
 
+        return True
+
+    # ── Branch Capability Card (sprint 시작 전, 분기당 1장) ───────────────
+
+    def send_branch_capability_cards(
+        self,
+        source_path: Path,
+        *,
+        sprint_num: int,
+        project_name: str = "",
+    ) -> int:
+        """sprint-capabilities.md → 인트로 1 + 분기당 1 reply.
+
+        반환: 발송 성공한 카드 개수 (인트로 제외, 분기 카드만 카운트). 0이면
+        파일 없음 / branches 비어있음 / Slack 비활성. 호출자는 0일 때 게이트
+        진입 skip + 경고.
+        """
+        if not self.enabled or self._web is None:
+            return 0
+
+        from ...judgment import (
+            BranchCapability,
+            build_branch_capability_card_blocks,
+            build_branch_capability_intro_blocks,
+            parse_branch_capabilities,
+        )
+
+        caps: list[BranchCapability] = parse_branch_capabilities(source_path)
+        if not caps:
+            return 0
+
+        display_project = project_name or self._project_name
+        total = len(caps)
+
+        intro_blocks = build_branch_capability_intro_blocks(sprint_num, total)
+        intro_fallback = (
+            f"🎯 [{display_project}] Sprint {sprint_num} 분기 승인 {total}개"
+        )
+        self._rate_limiter.acquire()
+        self._post_card(intro_blocks, intro_fallback)
+
+        sent = 0
+        for idx, cap in enumerate(caps, start=1):
+            blocks = build_branch_capability_card_blocks(
+                cap, sprint_num=sprint_num, idx=idx, total=total
+            )
+            action_elements = [
+                {
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": "✅ 승인", "emoji": True},
+                    "action_id": f"forge_branch_cap_keep_{cap.id}",
+                    "value": f"{self._project_name}::branch_cap::{cap.id}::keep"[:2000],
+                    "style": "primary",
+                },
+                {
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": "❌ 분기 빼기", "emoji": True},
+                    "action_id": f"forge_branch_cap_drop_{cap.id}",
+                    "value": f"{self._project_name}::branch_cap::{cap.id}::drop"[:2000],
+                    "style": "danger",
+                },
+                {
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": "✏️ 수정 요청", "emoji": True},
+                    "action_id": f"forge_branch_cap_revise_{cap.id}",
+                    "value": f"{self._project_name}::branch_cap::{cap.id}::revise"[:2000],
+                },
+            ]
+            blocks.append({"type": "actions", "elements": action_elements})
+
+            fallback = (
+                f"🎯 [{display_project}] {cap.title or cap.id} ({cap.id}) — "
+                f"본질 근접 {max(cap.score_llm, cap.score_floor)}%"
+            )
+            self._rate_limiter.acquire()
+            if self._post_card(blocks, fallback):
+                sent += 1
+
+        return sent
+
+    # ── Sprint Approval Card (finalizer 통합 직후 1장) ────────────────────
+
+    def send_sprint_approval_card(
+        self,
+        *,
+        sprint_num: int,
+        done_path: Path,
+        branch_qa_paths: Optional[list[Path]] = None,
+        next_sprint_preview: str = "",
+        escalated_branches: Optional[list[str]] = None,
+        project_name: str = "",
+    ) -> bool:
+        """finalizer 직후 sprint 통합 승인 카드 1장.
+
+        반환: 발송 성공 True. done.md 부재 / Slack 비활성이면 False.
+        """
+        if not self.enabled or self._web is None:
+            return False
+
+        from ...judgment import (
+            build_sprint_approval_card_blocks,
+            parse_sprint_approval,
+        )
+
+        data = parse_sprint_approval(
+            done_path,
+            sprint_num=sprint_num,
+            branch_qa_paths=branch_qa_paths,
+            next_sprint_preview=next_sprint_preview,
+            escalated_branches=escalated_branches,
+        )
+        if data is None:
+            return False
+
+        blocks = build_sprint_approval_card_blocks(data)
+        blocks.append(
+            {
+                "type": "actions",
+                "elements": [
+                    {
+                        "type": "button",
+                        "text": {
+                            "type": "plain_text",
+                            "text": "✅ 승인하고 다음 sprint 진행",
+                            "emoji": True,
+                        },
+                        "action_id": f"forge_sprint_done_approve_{sprint_num}",
+                        "value": (
+                            f"{self._project_name}::sprint_done::{sprint_num}::approve"
+                        )[:2000],
+                        "style": "primary",
+                    },
+                    {
+                        "type": "button",
+                        "text": {
+                            "type": "plain_text",
+                            "text": "✏️ 수정 요청 (Mode D)",
+                            "emoji": True,
+                        },
+                        "action_id": f"forge_sprint_done_revise_{sprint_num}",
+                        "value": (
+                            f"{self._project_name}::sprint_done::{sprint_num}::revise"
+                        )[:2000],
+                    },
+                ],
+            }
+        )
+
+        display_project = project_name or self._project_name
+        fallback = (
+            f"🏁 [{display_project}] Sprint {sprint_num} 통합 완료 — 승인 요청"
+        )
+        self._rate_limiter.acquire()
+        return self._post_card(blocks, fallback)
+
+    def _post_card(self, blocks: list[dict], fallback: str) -> bool:
+        """Block Kit 카드 1장을 thread reply로 발송. 발송 성공 True.
+
+        send_branch_capability_cards / send_sprint_approval_card 공용.
+        thread_ts 자동 root 설정도 동일 패턴.
+        """
+        if self._web is None:
+            return False
+        post_kwargs: dict = {
+            "channel": self._channel,
+            "username": self._display_name,
+            "icon_emoji": self._emoji,
+            "text": fallback[:3000],
+            "blocks": blocks,
+        }
+        if self._thread_ts:
+            post_kwargs["thread_ts"] = self._thread_ts
+
+        try:
+            resp = self._web.chat_postMessage(**post_kwargs)
+        except Exception as e:
+            logger.warning("Slack _post_card 실패: %s", e)
+            return False
+
+        if not self._thread_ts:
+            root_ts = (resp.get("ts") if hasattr(resp, "get") else None) if resp else None
+            if root_ts:
+                self._thread_ts = root_ts
+                self._save_thread_ts(root_ts)
         return True
 
     @property
@@ -696,6 +917,47 @@ class SlackNotifier(NotifierAdapter):
                         f"[Slack]   ✓ ASK_USER 응답 저장 qid={qid} option={option_id}",
                         flush=True,
                     )
+                return
+
+            # Branch Capability Card — `branch_cap::<branch_id>::<action>` 형태.
+            # action ∈ keep/drop/revise. revise는 기존 modal 흐름으로 라우팅.
+            if action_raw.startswith("branch_cap::"):
+                parts = action_raw.split("::")
+                if len(parts) >= 3:
+                    branch_id = parts[1]
+                    cap_action = parts[2].strip().lower()
+                    if cap_action == "revise":
+                        trigger_id = payload.get("trigger_id")
+                        if trigger_id:
+                            self._open_revise_modal(trigger_id)
+                        return
+                    if cap_action in BRANCH_CAP_ACTIONS:
+                        self._append_branch_cap_signal(branch_id, cap_action)
+                        print(
+                            f"[Slack]   ✓ Branch Capability 신호 저장 "
+                            f"branch={branch_id} action={cap_action}",
+                            flush=True,
+                        )
+                return
+
+            # Sprint Approval Card — `sprint_done::<sprint_num>::<action>` 형태.
+            # action ∈ approve/revise. revise는 기존 modal 재사용.
+            if action_raw.startswith("sprint_done::"):
+                parts = action_raw.split("::")
+                if len(parts) >= 3:
+                    sprint_num = parts[1]
+                    sd_action = parts[2].strip().lower()
+                    if sd_action == "revise":
+                        trigger_id = payload.get("trigger_id")
+                        if trigger_id:
+                            self._open_revise_modal(trigger_id)
+                        return
+                    if sd_action == "approve":
+                        self._write_sprint_done_signal(sprint_num)
+                        print(
+                            f"[Slack]   ✓ Sprint {sprint_num} 승인 신호 저장",
+                            flush=True,
+                        )
                 return
 
             action = action_raw.strip().lower()

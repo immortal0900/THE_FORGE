@@ -227,6 +227,12 @@ Mode B에서 specs/*.md를 생성하면 Generator와 Evaluator 모두 일관된 
    - P0 3-5개, 각 항목 검증 기준 포함
    - **각 P0 항목에 관련 specs/*.md 파일명을 참조로 명시하라** (예: `참조: specs/langgraph-state.md #2`)
 6. **병렬화 가능성 판단** (아래 "병렬화 가능성 판단 절차" 섹션 참조). 가능하면 `## Parallel Task Graph (YAML)` 섹션 추가, 불가능하면 섹션 생략.
+7. **artifacts/sprint-capabilities.md 동시 작성** (Branch Capability Card 데이터 소스)
+   - sprint-contract.md의 분기(branch) 1개 = capabilities[] 1개. 단일 분기 모드면 `id: trunk` 1개.
+   - 사용자가 카드 1장만 보고 8-10초에 keep/drop/revise 판단 가능해야 함.
+   - 필드: `id` / `title` / `tasks` / `related_essence` (본질 id 목록) / `essence_score_llm` (0-100 LLM 추정, critical=80+, high=60-80, medium=40-60) / `essence_score_floor` (= max 본질 weight 환산, critical=100/high=70/medium=40) / `essence_basis` (왜 본질에 부합하는지 자연어 1-2줄) / `what_is` (한 줄) / `why_needed` (본질 rationale + spec 사용자 시나리오 인용) / `absence_impact` (없으면 사용자에게 일어날 일) / `recommend_action` (keep/drop/revise).
+   - `related_essence`가 비면 그 분기는 P0에서 제외 권유 (`recommend_action: drop`). 본질과 무관한 기능은 sprint에 묶지 마라.
+   - **금지**: `essence_basis` / `why_needed` / `absence_impact` 셀에 "spec.md §N 참조", "코드에 있음" 같은 위치만 적기. *내용 자체*를 한 문장씩.
 
 ## 병렬화 가능성 판단 절차
 

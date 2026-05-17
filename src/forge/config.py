@@ -212,6 +212,7 @@ class ProjectPaths:
         self.spec = self.artifacts / "spec.md"
         self.plan_review = self.artifacts / "plan-review.md"
         self.sprint_contract = self.artifacts / "sprint-contract.md"
+        self.sprint_capabilities = self.artifacts / "sprint-capabilities.md"
         self.progress_log = self.artifacts / "progress-log.md"
         self.qa_report = self.artifacts / "qa-report.md"
         self.cost_log = self.artifacts / "harness-cost-log.txt"
@@ -225,6 +226,8 @@ class ProjectPaths:
         self.eval_signal = self.artifacts / ".eval-signal"
         self.stop_signal = self.artifacts / ".stop-signal"
         self.revise_signal = self.artifacts / ".revise-signal"
+        self.capability_drops = self.artifacts / ".capability-drops"
+        self.sprint_done_signal = self.artifacts / ".sprint-done-signal"
 
         # 큰 그림 3 (docs/plan-judgment-velocity.md): Slack thread_ts 영구 저장.
         # 첫 notify 시 root 메시지가 되고 그 ts를 여기 저장 → 이후 모든 알림이

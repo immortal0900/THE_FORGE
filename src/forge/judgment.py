@@ -375,7 +375,7 @@ def build_verdict_card_blocks(
     for v in verdicts:
         icons += _VERDICT_ICON.get(v.verdict, "❓")
         counts[v.verdict] = counts.get(v.verdict, 0) + 1
-    header_text = f"본질 부합도 {icons}  {counts['VERIFIED']}/{len(verdicts)} axioms"
+    header_text = f"본질 부합도 {icons}  {counts['VERIFIED']}/{len(verdicts)} 본질"
 
     blocks.append(
         {
@@ -428,4 +428,497 @@ def build_verdict_card_blocks(
             }
         )
 
+    return blocks
+
+
+# ── Branch Capability Card 데이터 ─────────────────────────────────────────
+
+
+@dataclass
+class BranchCapability:
+    """sprint-capabilities.md frontmatter의 branches[] 항목 한 개.
+
+    planner Mode C가 sprint-contract.md와 1:1로 작성. orchestrator가 sprint
+    시작 전 게이트에서 분기당 1장의 카드로 사용자에게 노출 → keep/drop/revise.
+    """
+
+    id: str
+    title: str = ""
+    tasks: list[str] = field(default_factory=list)
+    related_essence: list[str] = field(default_factory=list)
+    score_llm: int = 0
+    score_floor: int = 0
+    basis: str = ""
+    what_is: str = ""
+    why_needed: str = ""
+    absence_impact: str = ""
+    recommend_action: str = "keep"   # keep | drop | revise
+
+
+def _coerce_str_list_loose(value) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value] if value.strip() else []
+    if isinstance(value, (list, tuple)):
+        return [str(item).strip() for item in value if str(item).strip()]
+    return []
+
+
+def parse_branch_capabilities(source: Path) -> list[BranchCapability]:
+    """sprint-capabilities.md frontmatter에서 BranchCapability 목록 추출.
+
+    파일 없음 / frontmatter 없음 / branches 키 없음 → 빈 리스트 (silent fallback —
+    planner 누락 케이스는 orchestrator가 별도 경고 처리).
+    YAML 파싱 오류는 ValueError로 끌어올린다 (silent 금지).
+    """
+    if not source.exists():
+        return []
+    text = source.read_text(encoding="utf-8", errors="replace")
+    m = _FRONTMATTER_RE.match(text)
+    if not m:
+        return []
+    try:
+        data = yaml.safe_load(m.group(1))
+    except yaml.YAMLError as exc:
+        raise ValueError(f"sprint-capabilities.md frontmatter YAML 파싱 실패: {exc}") from exc
+    if not isinstance(data, dict):
+        return []
+    raw_branches = data.get("branches")
+    if not isinstance(raw_branches, list):
+        return []
+
+    caps: list[BranchCapability] = []
+    for idx, item in enumerate(raw_branches):
+        if not isinstance(item, dict):
+            continue
+        bid = str(item.get("id", "")).strip()
+        if not bid:
+            continue
+        score_llm_raw = item.get("essence_score_llm", item.get("score_llm", 0))
+        score_floor_raw = item.get("essence_score_floor", item.get("score_floor", 0))
+        try:
+            score_llm = max(0, min(100, int(score_llm_raw)))
+        except (TypeError, ValueError):
+            score_llm = 0
+        try:
+            score_floor = max(0, min(100, int(score_floor_raw)))
+        except (TypeError, ValueError):
+            score_floor = 0
+        caps.append(
+            BranchCapability(
+                id=bid,
+                title=str(item.get("title", "")).strip(),
+                tasks=_coerce_str_list_loose(item.get("tasks")),
+                related_essence=_coerce_str_list_loose(item.get("related_essence")),
+                score_llm=score_llm,
+                score_floor=score_floor,
+                basis=str(item.get("essence_basis", item.get("basis", ""))).strip(),
+                what_is=str(item.get("what_is", "")).strip(),
+                why_needed=str(item.get("why_needed", "")).strip(),
+                absence_impact=str(item.get("absence_impact", "")).strip(),
+                recommend_action=str(item.get("recommend_action", "keep")).strip() or "keep",
+            )
+        )
+    return caps
+
+
+# ── Branch Capability Card 렌더 ───────────────────────────────────────────
+
+
+def _proximity_icon(score: int) -> str:
+    """0-100 근접도 → ✅⚠️❌ 시각 아이콘."""
+    if score >= 80:
+        return "✅"
+    if score >= 60:
+        return "⚠️"
+    return "❌"
+
+
+def build_branch_capability_intro_blocks(
+    sprint_num: int,
+    total: int,
+) -> list[dict]:
+    """분기 카드 N장 발송 전 인트로 1장. 'Sprint N 분기 승인 M개'."""
+    return [
+        {
+            "type": "header",
+            "text": {
+                "type": "plain_text",
+                "text": f"🎯 Sprint {sprint_num} 분기 승인 — {total}개",
+                "emoji": True,
+            },
+        },
+        {
+            "type": "context",
+            "elements": [
+                {
+                    "type": "mrkdwn",
+                    "text": (
+                        "각 분기별로 본질 부합도와 작업 범위를 확인하고 "
+                        "[승인 / 분기 빼기 / 수정 요청] 중 하나를 선택하세요."
+                    ),
+                }
+            ],
+        },
+    ]
+
+
+def build_branch_capability_card_blocks(
+    cap: BranchCapability,
+    *,
+    sprint_num: int,
+    idx: int,
+    total: int,
+) -> list[dict]:
+    """분기 1개 카드 (4섹션 + task 체크리스트 + 액션 버튼).
+
+    Slack Block Kit 구조. 액션 버튼 value는 orchestrator 헬퍼가 project_name
+    prefix와 합쳐 `{project}::branch_cap::{branch_id}::{action}` 형태로 만든다.
+    """
+    icon = _proximity_icon(max(cap.score_llm, cap.score_floor))
+    essence_chips = " ".join(f"[{e}]" for e in cap.related_essence) or "(매핑 없음)"
+
+    blocks: list[dict] = []
+    blocks.append(
+        {
+            "type": "header",
+            "text": {
+                "type": "plain_text",
+                "text": f"{icon} {cap.title or cap.id}  ({cap.id})  [{idx}/{total}]",
+                "emoji": True,
+            },
+        }
+    )
+    blocks.append(
+        {
+            "type": "context",
+            "elements": [
+                {"type": "mrkdwn", "text": f"관련 본질: {essence_chips}"}
+            ],
+        }
+    )
+
+    if cap.tasks:
+        task_lines = "\n".join(f"  ☐ {t}" for t in cap.tasks)
+        blocks.append(
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"*이 분기의 작업*\n{task_lines}"[:2900],
+                },
+            }
+        )
+
+    bar_llm = _confidence_bar(cap.score_llm)
+    bar_floor = _confidence_bar(cap.score_floor)
+    proximity_lines = [
+        "*① 본질 근접도*",
+        f"  • LLM 추정 *{cap.score_llm}%*  `{bar_llm}`",
+        f"  • 규칙 하한 *{cap.score_floor}%*  `{bar_floor}`",
+    ]
+    if cap.related_essence:
+        proximity_lines.append(f"  • 매핑 본질: {', '.join(cap.related_essence)}")
+    if cap.basis:
+        proximity_lines.append(f"  • _근거_: {cap.basis}")
+    blocks.append(
+        {
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": "\n".join(proximity_lines)[:2900]},
+        }
+    )
+
+    what_text = cap.what_is or "_(planner가 채우지 않음)_"
+    blocks.append(
+        {
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": f"*② 무슨 기능*\n{what_text}"[:2900]},
+        }
+    )
+
+    why_text = cap.why_needed or "_(planner가 채우지 않음)_"
+    blocks.append(
+        {
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": f"*③ 왜 필요한가*\n{why_text}"[:2900]},
+        }
+    )
+
+    absence_text = cap.absence_impact or "_(planner가 채우지 않음)_"
+    blocks.append(
+        {
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": f"*④ 이게 없으면*\n{absence_text}"[:2900]},
+        }
+    )
+
+    if cap.recommend_action:
+        blocks.append(
+            {
+                "type": "context",
+                "elements": [
+                    {
+                        "type": "mrkdwn",
+                        "text": f"💡 LLM 추천: `{cap.recommend_action}`",
+                    }
+                ],
+            }
+        )
+
+    return blocks
+
+
+# ── Sprint Approval Card (finalizer 직후) ──────────────────────────────────
+
+
+@dataclass
+class SprintApprovalData:
+    """finalizer 산출물에서 추출한 Sprint Approval Card용 데이터.
+
+    sprint_num: sprint 번호
+    merged_branches: 머지된 분기 목록 (id, status, conflict_count)
+    decisions: 사용된 decision-NNN 목록 (decision_id, summary)
+    essence_scores: 분기 가중 본질 평균 (essence_id, avg_score, icon)
+    next_sprint_preview: 다음 sprint 예고
+    escalated_branches: escalate된 분기 (있으면)
+    """
+
+    sprint_num: int
+    merged_branches: list[dict] = field(default_factory=list)
+    decisions: list[dict] = field(default_factory=list)
+    essence_scores: list[dict] = field(default_factory=list)
+    next_sprint_preview: str = ""
+    escalated_branches: list[str] = field(default_factory=list)
+
+
+_DONE_BRANCHES_SECTION_RE = re.compile(
+    r"^##\s*머지된\s*분기\s*$(.*?)(?=^##\s|\Z)",
+    re.MULTILINE | re.DOTALL,
+)
+_DONE_DECISIONS_SECTION_RE = re.compile(
+    r"^##\s*사용된\s*decision[^\n]*$(.*?)(?=^##\s|\Z)",
+    re.MULTILINE | re.DOTALL | re.IGNORECASE,
+)
+
+
+def _parse_done_branches(section: str) -> list[dict]:
+    """`- branch-1 - 충돌 N건` 같은 라인 파싱."""
+    rows: list[dict] = []
+    for raw in section.splitlines():
+        line = raw.strip()
+        if not line.startswith("-"):
+            continue
+        body = line.lstrip("-").strip()
+        m = re.match(r"([A-Za-z0-9_-]+)\s*[-:]\s*(.+)$", body)
+        if not m:
+            rows.append({"id": body, "status": "merged", "note": ""})
+            continue
+        bid = m.group(1)
+        note = m.group(2).strip()
+        conflict_match = re.search(r"충돌\s*(\d+)\s*건", note)
+        conflict_count = int(conflict_match.group(1)) if conflict_match else 0
+        status = "merged"
+        if "abort" in note.lower() or "fail" in note.lower():
+            status = "failed"
+        rows.append(
+            {
+                "id": bid,
+                "status": status,
+                "conflict_count": conflict_count,
+                "note": note,
+            }
+        )
+    return rows
+
+
+def _parse_done_decisions(section: str) -> list[dict]:
+    rows: list[dict] = []
+    for raw in section.splitlines():
+        line = raw.strip()
+        if not line.startswith("-"):
+            continue
+        body = line.lstrip("-").strip()
+        m = re.match(r"(decision-\d+)\s*[-:]?\s*(.*)$", body, re.IGNORECASE)
+        if not m:
+            continue
+        rows.append({"decision_id": m.group(1), "summary": m.group(2).strip()})
+    return rows
+
+
+def _aggregate_essence_scores(
+    paths_per_branch: list[Path],
+) -> list[dict]:
+    """각 분기 qa-report.md의 Axiom Verdicts를 본질 id별로 평균.
+
+    paths_per_branch: 분기별 qa-report.md 절대 경로 list (존재 안 하는 건 skip).
+    반환: [{"id": "a1", "avg_score": 92, "icon": "✅", "weak_branches": [...]}]
+    """
+    bucket: dict[str, dict] = {}
+    for qa_path in paths_per_branch:
+        verdicts = parse_axiom_verdicts(qa_path)
+        for v in verdicts:
+            slot = bucket.setdefault(
+                v.id,
+                {"id": v.id, "statement": v.statement, "scores": [], "weak_branches": []},
+            )
+            slot["scores"].append(v.confidence)
+            if v.confidence < 70:
+                slot["weak_branches"].append(qa_path.parent.name)
+
+    rows: list[dict] = []
+    for axiom_id, slot in bucket.items():
+        scores = slot["scores"]
+        avg = round(sum(scores) / len(scores)) if scores else 0
+        rows.append(
+            {
+                "id": axiom_id,
+                "statement": slot["statement"],
+                "avg_score": avg,
+                "icon": _proximity_icon(avg),
+                "weak_branches": slot["weak_branches"],
+            }
+        )
+    rows.sort(key=lambda r: r["id"])
+    return rows
+
+
+def parse_sprint_approval(
+    done_path: Path,
+    *,
+    sprint_num: int,
+    branch_qa_paths: Optional[list[Path]] = None,
+    next_sprint_preview: str = "",
+    escalated_branches: Optional[list[str]] = None,
+) -> Optional[SprintApprovalData]:
+    """finalizer 산출물 `sprint-{N}-done.md` 파싱 + 분기 qa-report 본질 집계.
+
+    done_path 없으면 None (orchestrator가 카드 발송 skip + 경고).
+    """
+    if not done_path.exists():
+        return None
+    text = done_path.read_text(encoding="utf-8", errors="replace")
+
+    merged: list[dict] = []
+    m_branches = _DONE_BRANCHES_SECTION_RE.search(text)
+    if m_branches:
+        merged = _parse_done_branches(m_branches.group(1))
+
+    decisions: list[dict] = []
+    m_decisions = _DONE_DECISIONS_SECTION_RE.search(text)
+    if m_decisions:
+        decisions = _parse_done_decisions(m_decisions.group(1))
+
+    essence_scores: list[dict] = []
+    if branch_qa_paths:
+        essence_scores = _aggregate_essence_scores(branch_qa_paths)
+
+    return SprintApprovalData(
+        sprint_num=sprint_num,
+        merged_branches=merged,
+        decisions=decisions,
+        essence_scores=essence_scores,
+        next_sprint_preview=next_sprint_preview,
+        escalated_branches=list(escalated_branches or []),
+    )
+
+
+def build_sprint_approval_card_blocks(data: SprintApprovalData) -> list[dict]:
+    """Sprint Approval Card Block Kit 빌더 (finalizer 통합 직후).
+
+    헤더 + 머지 결과 + 충돌 결정 + 본질 부합도 종합 + 다음 sprint 예고.
+    버튼은 orchestrator 헬퍼가 첨부.
+    """
+    blocks: list[dict] = []
+    blocks.append(
+        {
+            "type": "header",
+            "text": {
+                "type": "plain_text",
+                "text": f"🏁 Sprint {data.sprint_num} 통합 완료 — 승인 요청",
+                "emoji": True,
+            },
+        }
+    )
+
+    if data.merged_branches:
+        chips = []
+        for b in data.merged_branches:
+            icon = "✅"
+            if b.get("status") == "failed":
+                icon = "❌"
+            elif b.get("conflict_count", 0) > 0:
+                icon = "⚠️"
+            note = ""
+            if b.get("conflict_count", 0) > 0:
+                note = f"(충돌 {b['conflict_count']}건)"
+            chips.append(f"{b['id']} {icon}{note}")
+        blocks.append(
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": "*머지된 분기*\n" + " / ".join(chips),
+                },
+            }
+        )
+
+    if data.escalated_branches:
+        blocks.append(
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": (
+                        "*escalate된 분기*\n"
+                        + ", ".join(data.escalated_branches)
+                        + " (Planner 재호출 대기)"
+                    ),
+                },
+            }
+        )
+
+    if data.decisions:
+        deco_lines = "\n".join(
+            f"  • `{d['decision_id']}` {d.get('summary', '')}" for d in data.decisions
+        )
+        blocks.append(
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"*충돌 결정 (사용자 사후 검토)*\n{deco_lines}"[:2900],
+                },
+            }
+        )
+
+    if data.essence_scores:
+        lines = ["*본질 부합도 종합 (분기 평균)*"]
+        for e in data.essence_scores:
+            line = f"  {e['icon']} *{e['id']}*  {e.get('statement', '')[:50]}  {e['avg_score']}%"
+            if e["weak_branches"]:
+                line += f"  _(약함: {', '.join(e['weak_branches'])})_"
+            lines.append(line)
+        blocks.append(
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": "\n".join(lines)[:2900]},
+            }
+        )
+
+    if data.next_sprint_preview:
+        blocks.append(
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": (
+                        "*다음 sprint 예정*\n"
+                        + data.next_sprint_preview[:1000]
+                    ),
+                },
+            }
+        )
+
+    blocks.append({"type": "divider"})
     return blocks

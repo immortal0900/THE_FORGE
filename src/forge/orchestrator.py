@@ -6,6 +6,7 @@ import platform
 import re
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -15,7 +16,7 @@ from ._logging import report_subprocess
 from .agents import evaluator as ev
 from .agents import planner as pl
 from .agents.runner import run_agent_sync
-from .checkpoint import Checkpoint, Phase
+from .checkpoint import BranchState, Checkpoint, Phase
 from .config import ForgeConfig, ProjectPaths
 from .cost_tracker import SprintTracer, parse_cost_log
 from .notifier import NotifierAdapter, get_notifier
@@ -336,7 +337,7 @@ def _make_on_question(
                 heartbeat_msg = (
                     f"⏳ ASK_USER 응답 대기 중 ({elapsed_h}h 경과)\n"
                     f"qid: {qid}\n"
-                    f"axiom: {axiom_link or '(없음)'}\n"
+                    f"본질: {axiom_link or '(없음)'}\n"
                     f"질문: {situation[:200]}\n"
                     f"\n위 스레드의 옵션 카드에서 버튼을 눌러 답해주세요."
                 )
@@ -392,6 +393,150 @@ def _try_send_verdict_card(
         buttons=buttons,
         project_name=paths.project_name,
     )
+
+
+def _try_send_branch_capability_cards(
+    notifier: NotifierAdapter,
+    paths: ProjectPaths,
+    sprint_num: int,
+) -> int:
+    """Slack notifier일 때만 sprint-capabilities.md → 분기 카드 N장 발송.
+
+    반환: 발송한 분기 카드 개수 (인트로 제외). 0이면 파일 없음 / Slack 비활성
+    → 호출자(orchestrator)는 게이트 진입 skip 또는 텍스트 fallback으로 진행.
+    """
+    from .notifier.slack.adapter import SlackNotifier
+
+    if not isinstance(notifier, SlackNotifier):
+        return 0
+    return notifier.send_branch_capability_cards(
+        paths.sprint_capabilities,
+        sprint_num=sprint_num,
+        project_name=paths.project_name,
+    )
+
+
+def _try_send_sprint_approval_card(
+    notifier: NotifierAdapter,
+    paths: ProjectPaths,
+    sprint_num: int,
+    *,
+    branch_qa_paths: Optional[list[Path]] = None,
+    next_sprint_preview: str = "",
+    escalated_branches: Optional[list[str]] = None,
+) -> bool:
+    """finalizer 통합 직후 sprint 승인 카드 발송. Slack만 동작."""
+    from .notifier.slack.adapter import SlackNotifier
+
+    if not isinstance(notifier, SlackNotifier):
+        return False
+    done_path = paths.sprint_done_path(sprint_num)
+    return notifier.send_sprint_approval_card(
+        sprint_num=sprint_num,
+        done_path=done_path,
+        branch_qa_paths=branch_qa_paths,
+        next_sprint_preview=next_sprint_preview,
+        escalated_branches=escalated_branches,
+        project_name=paths.project_name,
+    )
+
+
+def _consume_capability_drops(paths: ProjectPaths) -> tuple[list[str], list[str], list[str]]:
+    """paths.capability_drops 파일을 읽고 keep/drop/revise 분류 후 unlink.
+
+    파일 포맷 (1줄당): `{action}\t{branch_id}\n`. 동일 branch_id가 여러 번 나오면
+    마지막 action이 유효. 반환: (keep_ids, drop_ids, revise_ids).
+    """
+    if not paths.capability_drops.exists():
+        return [], [], []
+    try:
+        raw = paths.capability_drops.read_text(encoding="utf-8")
+    except OSError:
+        return [], [], []
+    latest: dict[str, str] = {}
+    for line in raw.splitlines():
+        if "\t" not in line:
+            continue
+        action, branch_id = line.split("\t", 1)
+        action = action.strip().lower()
+        branch_id = branch_id.strip()
+        if not branch_id or action not in {"keep", "drop", "revise"}:
+            continue
+        latest[branch_id] = action
+    paths.capability_drops.unlink(missing_ok=True)
+    keeps = [b for b, a in latest.items() if a == "keep"]
+    drops = [b for b, a in latest.items() if a == "drop"]
+    revises = [b for b, a in latest.items() if a == "revise"]
+    return keeps, drops, revises
+
+
+def _wait_for_branch_capability_decisions(
+    paths: ProjectPaths,
+    expected_branch_ids: list[str],
+    *,
+    poll_interval: float = 1.5,
+    max_seconds: float = 0.0,
+) -> tuple[list[str], list[str], list[str]]:
+    """모든 분기 카드에 사용자 결정이 도착할 때까지 폴링.
+
+    expected_branch_ids 의 모든 분기에 대해 keep/drop/revise 신호가 누적되면 종료.
+    max_seconds=0이면 무기한 대기 (기존 wait_for_approval 패턴과 동일 정신).
+    """
+    start = time.time()
+    aggregated: dict[str, str] = {}
+    while True:
+        keeps, drops, revises = _consume_capability_drops(paths)
+        for b in keeps:
+            aggregated[b] = "keep"
+        for b in drops:
+            aggregated[b] = "drop"
+        for b in revises:
+            aggregated[b] = "revise"
+        if expected_branch_ids and all(b in aggregated for b in expected_branch_ids):
+            break
+        if paths.stop_signal.exists() or paths.exit_signal.exists():
+            break
+        if max_seconds and (time.time() - start) >= max_seconds:
+            break
+        time.sleep(poll_interval)
+    keep_ids = [b for b in expected_branch_ids if aggregated.get(b) == "keep"]
+    drop_ids = [b for b in expected_branch_ids if aggregated.get(b) == "drop"]
+    revise_ids = [b for b in expected_branch_ids if aggregated.get(b) == "revise"]
+    return keep_ids, drop_ids, revise_ids
+
+
+def _wait_for_sprint_done_signal(
+    paths: ProjectPaths,
+    sprint_num: int,
+    *,
+    poll_interval: float = 1.5,
+    max_seconds: float = 0.0,
+) -> str:
+    """Sprint Approval Card 응답 폴링.
+
+    반환:
+      - "approve": 사용자가 승인하고 다음 sprint 진행
+      - "revise":  paths.revise_signal에 사용자 지시가 들어옴
+      - "stop":    /stop 또는 /exit 신호
+      - "timeout": max_seconds 초과 (max_seconds=0이면 발생 안 함)
+    """
+    start = time.time()
+    while True:
+        if paths.sprint_done_signal.exists():
+            try:
+                content = paths.sprint_done_signal.read_text(encoding="utf-8").strip()
+            except OSError:
+                content = ""
+            paths.sprint_done_signal.unlink(missing_ok=True)
+            if content == str(sprint_num) or not content:
+                return "approve"
+        if paths.revise_signal.exists():
+            return "revise"
+        if paths.stop_signal.exists() or paths.exit_signal.exists():
+            return "stop"
+        if max_seconds and (time.time() - start) >= max_seconds:
+            return "timeout"
+        time.sleep(poll_interval)
 
 
 def _notify_pass_with_next(
@@ -450,7 +595,7 @@ def _notify_pass_with_next(
         notifier,
         paths,
         recommendation="PASS — 다음 sprint 진행",
-        recommendation_reason="모든 axiom verdict 통과 (또는 critical PARTIAL 없음)",
+        recommendation_reason="모든 본질이 통과 (또는 critical PARTIAL 없음)",
         cost_estimate=f"이번 sprint {dur:.0f}분 / 누적 {total_mins:.0f}분",
         buttons=[["/resume", "/stop"], ["/status"]],
     )
@@ -558,8 +703,8 @@ def _notify_fail_with_options(
     _try_send_verdict_card(
         notifier,
         paths,
-        recommendation="FAIL — 위 axiom 행의 recommend_action 참고",
-        recommendation_reason="critical axiom PARTIAL/MISSING 또는 점수 미달",
+        recommendation="FAIL — 위 본질 행의 recommend_action 참고",
+        recommendation_reason="critical 본질 PARTIAL/MISSING 또는 점수 미달",
         cost_estimate=f"이번 sprint {dur:.0f}분 / 누적 {total_mins:.0f}분",
         buttons=[["/resume", "/eval"], ["/skip", "/stop"]],
     )
@@ -650,7 +795,7 @@ def _run_multi_branch_sprint(
     sprint_num: int,
     sprint_tracer: SprintTracer,
     notifier: NotifierAdapter,
-) -> None:
+) -> list:
     """단계 6의 다중 분기 흐름.
 
     동작 (단계 6 명세 그대로):
@@ -665,9 +810,9 @@ def _run_multi_branch_sprint(
     8. auto_commit_worktree per branch (evaluator turn).
     9. cp.advance(EVALUATING_DONE).
 
-    세션 C 위임 지점:
-    - 단계 7 finalizer 호출 (호출자가 _run_multi_branch_sprint 호출 직후 추가)
-    - 단계 8 FAIL 격상 + PASS 부분 머지 (호출자가 evaluator 결과를 모아 처리)
+    반환: 생성된 worktree 객체 list (호출자가 단계 7 finalizer + 단계 8 escalation에
+    전달). worktree 생성 자체가 실패한 경우 RuntimeError를 그대로 raise하므로
+    호출자는 정상 경로에서 항상 list를 받는다.
     """
     branch_ids = [s.id for s in branch_specs]
 
@@ -836,6 +981,8 @@ def _run_multi_branch_sprint(
         bs.phase = Phase.EVALUATING_DONE
     cp.advance(Phase.EVALUATING_DONE, f"parallel evaluation complete (sprint {sprint_num})")
     cp.save(paths.checkpoint_file)
+
+    return worktrees
 
 
 # ── 병렬 분기 finalization + escalation (parallel-branches-design.md 단계 7-8) ──
@@ -1355,12 +1502,12 @@ def run_cycle(
                 source=paths.plan_review,
                 recommendation=(
                     "기획 진행 — READY" if status == "READY"
-                    else "기획 수정 권장 — 위 axiom 행의 recommend_action 참고"
+                    else "기획 수정 권장 — 위 본질 행의 recommend_action 참고"
                 ),
                 recommendation_reason=(
-                    "모든 critical axiom이 spec.md에 반영됨"
+                    "모든 critical 본질이 spec.md에 반영됨"
                     if status == "READY"
-                    else "일부 axiom이 PARTIAL/MISSING 상태"
+                    else "일부 본질이 PARTIAL/MISSING 상태"
                 ),
                 buttons=plan_buttons,
             )
@@ -1509,17 +1656,96 @@ def run_cycle(
                         project_name=paths.project_name,
                     )
 
-                # 첫 Sprint Contract만 승인 대기. revise 요청 시 Mode D로 되돌려 spec 수정 가능
-                if sprint_num == 1:
-                    cp.note(f"contract generated, awaiting sprint {sprint_num} approval")
-                    cp.save(paths.checkpoint_file)
-                    notifier.notify(
-                        "sprint_contract",
-                        f"Sprint {sprint_num} contract 생성됨.",
-                        file_path=paths.sprint_contract if paths.sprint_contract.exists() else None,
-                        project_name=paths.project_name,
-                        buttons=[["/resume", "/revise"], ["/exit"]],
-                    )
+                # 모든 sprint contract 게이트 (HITL 보강 후보 1).
+                # sprint 1 외 sprint 2/3/...도 게이트에 진입하여 Capability Card로
+                # 분기 단위 본질 부합도를 사용자가 검토 후 진행.
+                # 잔여 신호 청소 (이전 sprint 결정이 남아있을 수 있음)
+                paths.capability_drops.unlink(missing_ok=True)
+
+                # Branch Capability Card 발송 + drop 신호 폴링.
+                # drop이 1개라도 있으면 Mode D 진입 (contract regen), 아니면 contract
+                # 알림 + 기존 revise/resume 루프로 진입.
+                expected_cap_branches: list[str] = []
+                try:
+                    from .judgment import parse_branch_capabilities
+                    expected_cap_branches = [
+                        c.id for c in parse_branch_capabilities(paths.sprint_capabilities)
+                    ]
+                except Exception as e:
+                    console.print(f"[yellow]sprint-capabilities.md 파싱 실패: {e}[/yellow]")
+
+                if expected_cap_branches:
+                    sent = _try_send_branch_capability_cards(notifier, paths, sprint_num)
+                    if sent > 0:
+                        console.print(
+                            f"[cyan]Sprint {sprint_num} Branch Capability Card {sent}장 발송 — 사용자 결정 대기[/cyan]"
+                        )
+                        keep_ids, drop_ids, revise_ids = _wait_for_branch_capability_decisions(
+                            paths, expected_cap_branches
+                        )
+                        if drop_ids or revise_ids:
+                            directive_lines = []
+                            if drop_ids:
+                                directive_lines.append(
+                                    f"사용자가 다음 분기를 제외 요청: {', '.join(drop_ids)}. "
+                                    f"sprint-contract.md의 Parallel Task Graph에서 해당 분기를 빼고 "
+                                    f"sprint-capabilities.md도 동기화하라."
+                                )
+                            if revise_ids:
+                                directive_lines.append(
+                                    f"사용자가 다음 분기에 수정 요청: {', '.join(revise_ids)}. "
+                                    f"세부 내용은 후속 /revise 메시지를 기다리되, 우선 분기 범위를 재검토하라."
+                                )
+                            directive = "\n".join(directive_lines)
+                            console.print(
+                                f"[cyan]Capability 카드 결정에 따라 Planner Mode D 진입: {directive[:120]}[/cyan]"
+                            )
+                            cp.note(f"Mode D (capability drops): {directive[:80]}")
+                            cp.save(paths.checkpoint_file)
+                            with sprint_tracer.span("planner-revise") as info:
+                                info["input"] = (
+                                    f"[planner/revise from capability gate] {directive}"
+                                )
+                                result = pl.run_revise(directive, config, paths, notifier=notifier)
+                                info["stdout"] = result.stdout or ""
+                                report_subprocess(
+                                    result, "planner(revise from capability gate)", console
+                                )
+                            # contract와 capabilities를 폐기 후 재생성
+                            paths.sprint_contract.unlink(missing_ok=True)
+                            paths.sprint_capabilities.unlink(missing_ok=True)
+                            cp.note("contract+capabilities purged after capability drops")
+                            cp.save(paths.checkpoint_file)
+                            with sprint_tracer.span("contract") as info:
+                                info["input"] = (
+                                    f"[planner/contract] Sprint {sprint_num} contract regen "
+                                    f"after capability drops"
+                                )
+                                result = pl.run_contract(
+                                    sprint_num, config, paths,
+                                    essence=sprint_essence,
+                                    notifier=notifier,
+                                )
+                                info["stdout"] = result.stdout or ""
+                                report_subprocess(
+                                    result, f"planner(contract regen sprint-{sprint_num})", console
+                                )
+                            # 재발송: 새 capabilities 기준으로 Capability Card 다시 노출.
+                            # 단순화: 이번 게이트 루프 한 번만 반복하고 그 다음은 기존
+                            # revise/resume 루프로 위임 (무한 루프 방지).
+                            _try_send_branch_capability_cards(notifier, paths, sprint_num)
+
+                # 첫 sprint든 후속 sprint든 동일하게 contract 알림 + revise/resume 게이트.
+                cp.note(f"contract generated, awaiting sprint {sprint_num} approval")
+                cp.save(paths.checkpoint_file)
+                notifier.notify(
+                    "sprint_contract",
+                    f"Sprint {sprint_num} contract 생성됨.",
+                    file_path=paths.sprint_contract if paths.sprint_contract.exists() else None,
+                    project_name=paths.project_name,
+                    buttons=[["/resume", "/revise"], ["/exit"]],
+                )
+                if True:
                     # revise 수용 루프 — Planning 게이트와 동일한 원리
                     while True:
                         signal = wait_for_approval(paths, timeout=config.approval_timeout_seconds)
@@ -1599,9 +1825,6 @@ def run_cycle(
                             continue  # 다시 대기 — 추가 revise 또는 resume
                         # resume / skip / continue / timeout — 루프 탈출
                         break
-                else:
-                    cp.note(f"contract generated (sprint {sprint_num}), auto-proceeding")
-                    cp.save(paths.checkpoint_file)
 
                 cp.advance(Phase.CONTRACT_DONE, f"contract approved (sprint {sprint_num})")
                 cp.save(paths.checkpoint_file)
@@ -1709,13 +1932,16 @@ def run_cycle(
                     cp.save(paths.checkpoint_file)
             else:
                 # ============================================================
-                # === 다중 분기 모드 (병렬 실행) ===============================
+                # === 다중 분기 모드 (병렬 실행 + finalizer 통합) ==============
                 # ============================================================
-                # 단계 6의 핵심 흐름: trunk artifacts 자동 커밋 → worktree 생성 →
-                # generator N개 동시 실행 → worktree auto-commit → evaluator N개
-                # 동시 실행 → worktree auto-commit. finalizer 호출 + FAIL 격상은
-                # 세션 C 영역 (TODO 주석으로 위임 지점 표시).
-                _run_multi_branch_sprint(
+                # 단계 6: trunk artifacts 자동 커밋 → worktree 생성 → generator
+                # N개 동시 → worktree auto-commit → evaluator N개 동시 → worktree
+                # auto-commit.
+                # 단계 7: 모두 PASS면 _handle_parallel_sprint_finalization으로
+                # trunk 머지 + sprint-N-done.md 작성.
+                # 단계 8: 일부 FAIL이면 _handle_parallel_sprint_escalation으로
+                # PASS 분기 부분 머지 + 사용자 결정 게이트.
+                worktrees = _run_multi_branch_sprint(
                     branch_specs,
                     config,
                     paths,
@@ -1724,22 +1950,130 @@ def run_cycle(
                     sprint_tracer,
                     notifier,
                 )
-                # TODO(세션 C 단계 7): finalizer 호출 자리.
-                #   run_finalize(config, paths, branch_specs, worktrees, notifier=notifier)
-                #   → trunk 머지 + sprint-N-done.md 작성 또는 충돌 escalate.
-                # TODO(세션 C 단계 8): FAIL 격상 + PASS 분기 부분 머지 자리.
-                #   - branch별 ev.is_pass(paths, branch_id=spec.id) 집계
-                #   - 임계점 도달 시 Planner 재호출 + 새 sprint-contract.md
-                # 임시 종료: 세션 C 통합 전에는 다중 분기 sprint를 여기서 종료한다.
-                notifier.notify(
-                    "warning",
-                    f"⚠ Sprint {sprint_num} 다중 분기({len(branch_specs)}개) 평가까지 완료.\n"
-                    f"Finalizer 머지 + FAIL 격상은 세션 C 통합 후 활성화됩니다.\n"
-                    f"분기별 qa-report는 artifacts/branches/<branch_id>/qa-report.md 에 있습니다.",
-                    project_name=paths.project_name,
-                )
-                exit_code = 0
-                break
+
+                # 분기별 PASS/FAIL 집계.
+                branch_pass_map: dict[str, bool] = {}
+                for spec in branch_specs:
+                    bp = paths.branch_paths(spec.id)
+                    branch_pass_map[spec.id] = ev.is_pass(bp)
+                all_pass = all(branch_pass_map.values())
+                # cp.branches에 status 반영 (escalation이 branch_states를 참조).
+                for bs in cp.branches:
+                    bs.status = "passed" if branch_pass_map.get(bs.branch_id) else "failed"
+                cp.save(paths.checkpoint_file)
+
+                if all_pass:
+                    # 단계 7: 정상 finalize.
+                    final_result = _handle_parallel_sprint_finalization(
+                        config, paths, sprint_num, branch_specs, worktrees,
+                        notifier=notifier, sprint_tracer=sprint_tracer,
+                    )
+
+                    if final_result.status == "merged":
+                        consecutive_fails = 0
+                        # Sprint Approval Card 발송 + 사용자 게이트.
+                        branch_qa_paths = [
+                            paths.branch_paths(spec.id).qa_report for spec in branch_specs
+                        ]
+                        next_preview = _extract_next_sprint_preview(paths) or ""
+                        paths.sprint_done_signal.unlink(missing_ok=True)
+                        sent = _try_send_sprint_approval_card(
+                            notifier, paths, sprint_num,
+                            branch_qa_paths=branch_qa_paths,
+                            next_sprint_preview=next_preview,
+                        )
+                        if sent:
+                            console.print(
+                                f"[cyan]Sprint {sprint_num} 통합 승인 카드 발송 — 사용자 결정 대기[/cyan]"
+                            )
+                            decision = _wait_for_sprint_done_signal(paths, sprint_num)
+                            if decision == "stop":
+                                exit_code = 0
+                                break
+                            # approve/revise는 자연 진행. revise는 다음 sprint
+                            # contract 게이트에서 revise_signal로 처리됨.
+                        else:
+                            # Slack 비활성: 기존 PASS 알림으로 fallback.
+                            _notify_pass_with_next(
+                                notifier, sprint_tracer, sprint_num, paths
+                            )
+
+                        has_next = _parse_has_next_sprint(paths)
+                        if not has_next:
+                            _notify_project_complete(
+                                notifier, sprint_tracer, paths, sprint_num
+                            )
+                            cp.advance(Phase.NONE, f"project complete at sprint-{sprint_num}")
+                            cp.save(paths.checkpoint_file)
+                            break
+                        if single_sprint:
+                            cp.advance(Phase.NONE, f"sprint-{sprint_num} done (single-sprint mode)")
+                            cp.save(paths.checkpoint_file)
+                            break
+                        cp.advance(Phase.NONE, f"sprint-{sprint_num} done, continuing")
+                        cp.save(paths.checkpoint_file)
+                        cp = Checkpoint.load(paths.checkpoint_file)
+                        sprints_run += 1
+                        sprint_tracer.finalize()
+                        continue
+
+                    if final_result.status in ("merge_conflict", "scope_violation", "error"):
+                        # finalization 안에서 이미 사용자 알림 발사됨. /resume or /stop 대기.
+                        decision = wait_for_approval_or_stop(
+                            paths, timeout=config.approval_timeout_seconds
+                        )
+                        if decision == "stop":
+                            exit_code = 0
+                            break
+                        # resume: 같은 sprint를 다시 시도 (Phase.CONTRACT_DONE으로 되돌림)
+                        cp = Checkpoint(
+                            phase=Phase.CONTRACT_DONE,
+                            detail=f"sprint-{sprint_num} merge issue, retry",
+                        )
+                        cp.save(paths.checkpoint_file)
+                        sprints_run += 1
+                        sprint_tracer.finalize(status="interrupted")
+                        continue
+
+                else:
+                    # 단계 8: 일부 FAIL → escalation. PASS는 부분 머지, FAIL은 worktree 보존.
+                    consecutive_fails += 1
+                    branch_states_for_esc = [
+                        BranchState(
+                            branch_id=spec.id,
+                            phase=Phase.EVALUATING_DONE,
+                            sprint=sprint_num,
+                            consecutive_fails=consecutive_fails if not branch_pass_map[spec.id] else 0,
+                            status="passed" if branch_pass_map[spec.id] else "failed",
+                            timestamp=datetime.now().isoformat(),
+                        )
+                        for spec in branch_specs
+                    ]
+                    esc_result = _handle_parallel_sprint_escalation(
+                        config, paths, sprint_num, branch_specs, worktrees,
+                        branch_states_for_esc,
+                        notifier=notifier, sprint_tracer=sprint_tracer,
+                    )
+                    decision = esc_result.get("user_decision", "timeout")
+                    if decision in ("stop", "timeout"):
+                        exit_code = 0
+                        break
+                    if decision == "skip":
+                        cp.advance(Phase.NONE, f"sprint-{sprint_num} FAIL escalated + skipped")
+                        cp.save(paths.checkpoint_file)
+                        sprints_run += 1
+                        sprint_tracer.finalize(status="skipped")
+                        continue
+                    # resume / eval: 다시 같은 sprint 재시도. FAIL 분기 worktree는
+                    # 보존된 상태이므로 generator/evaluator 재실행으로 회복 시도.
+                    cp = Checkpoint(
+                        phase=Phase.CONTRACT_DONE,
+                        detail=f"sprint-{sprint_num} escalation retry",
+                    )
+                    cp.save(paths.checkpoint_file)
+                    sprints_run += 1
+                    sprint_tracer.finalize(status="interrupted")
+                    continue
 
             # Phase 5: 결과 판단 — qa-report.md 유효성 검증
             while True:
