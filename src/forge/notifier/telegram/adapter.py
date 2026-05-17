@@ -17,6 +17,11 @@ class TelegramNotifier(NotifierAdapter):
         self._paths = paths
         self._receiver = TelegramReceiver(config, paths)
 
+        # 단계 9: 동시 N개 알림 폭주 보호 (Slack과 동형).
+        from ..routing import TokenBucketRateLimiter
+
+        self._rate_limiter = TokenBucketRateLimiter(rate_per_sec=2.0, burst=4)
+
     @property
     def enabled(self) -> bool:
         return self._config.telegram_enabled
@@ -29,6 +34,10 @@ class TelegramNotifier(NotifierAdapter):
         project_name: str = "",
         buttons: Optional[list[list[str]]] = None,
     ) -> bool:
+        try:
+            self._rate_limiter.acquire(timeout=10.0)
+        except Exception:
+            pass
         return _notify(
             self._config,
             event_type,

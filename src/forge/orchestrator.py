@@ -463,13 +463,73 @@ def _notify_fail_with_options(
     sprint_num: int,
     paths: ProjectPaths,
     consecutive: int,
+    *,
+    branch_summaries: Optional[list[dict]] = None,
+    escalated_branches: Optional[list[str]] = None,
 ) -> None:
-    """FAIL + 선택지 알림."""
-    scores = _extract_scores_from_qa_report(paths)
+    """FAIL + 선택지 알림 (parallel-branches-design.md 단계 8).
+
+    단일 분기 모드(기존 호출 경로): branch_summaries/escalated_branches 미지정 →
+    이전 메시지 형식 그대로 (회귀 0).
+
+    병렬 모드(신규):
+    - branch_summaries=[{"branch_id":..., "status":"PASS"/"FAIL", "score":...,
+                          "consecutive_fails":int}].
+    - escalated_branches 비어있지 않으면 1 sprint = 1 알림 (escalation 시점만).
+    - escalated_branches 비어있으면 임계점 미만 자동 재시도 -> 알림 발사 X (early return).
+    """
+    is_parallel = branch_summaries is not None
+    if is_parallel and (not escalated_branches):
+        # 임계점 미만 자동 재시도. 1 sprint = 1 알림 원칙 — early return.
+        return
+
     totals = tracer.sprint_totals()
     total_mins = parse_cost_log(paths.cost_log)
-    score_lines = "\n".join(f"• {k}: {v}/10" for k, v in scores.items())
     dur = totals["duration_seconds"] / 60
+
+    if is_parallel:
+        # ── 병렬 모드: ESCALATION 일괄 통보 ──
+        score_lines = []
+        for s in branch_summaries or []:
+            bid = s.get("branch_id", "?")
+            status = s.get("status", "?")
+            score = s.get("score") or ""
+            cf = s.get("consecutive_fails")
+            score_part = f" ({score})" if score else ""
+            cf_part = (
+                f" — {cf}/{config.branch_fail_escalate_threshold} escalated"
+                if status == "FAIL" and cf is not None
+                else ""
+            )
+            score_lines.append(f"• {bid}: {status}{score_part}{cf_part}")
+        scores_block = "\n".join(score_lines) or "• (분기 정보 없음)"
+
+        escalated_str = ", ".join(escalated_branches or []) or "(없음)"
+        msg = (
+            f"Sprint {sprint_num} ESCALATION\n\n"
+            f"분기별 점수:\n{scores_block}\n\n"
+            f"escalation 분기: {escalated_str}\n"
+            f"─────────────────\n\n"
+            f"📊 비용\n"
+            f"• 이번 스프린트: {dur:.0f}분 | in {totals['tokens_input']:,} / out {totals['tokens_output']:,}\n"
+            f"• 누적: {total_mins:.0f}분\n\n"
+            f"─────────────────\n\n"
+            f"→ Planner 재호출 예정. 게이트:\n"
+            f"/resume — Planner 재호출 진행 (기본)\n"
+            f"/skip — 이대로 다음 sprint 진입\n"
+            f"/stop — 여기서 중단"
+        )
+        notifier.notify(
+            "qa_fail", msg,
+            file_path=paths.qa_report if paths.qa_report.exists() else None,
+            project_name=paths.project_name,
+            buttons=[["/resume", "/skip"], ["/stop"]],
+        )
+        return
+
+    # ── 단일 분기 모드 (기존 동작, 회귀 0) ──
+    scores = _extract_scores_from_qa_report(paths)
+    score_lines = "\n".join(f"• {k}: {v}/10" for k, v in scores.items())
     consecutive_line = (
         f"⚠️ 연속 FAIL: {consecutive}/{config.max_consecutive_fails}"
         if config.max_consecutive_fails > 0
@@ -776,6 +836,306 @@ def _run_multi_branch_sprint(
         bs.phase = Phase.EVALUATING_DONE
     cp.advance(Phase.EVALUATING_DONE, f"parallel evaluation complete (sprint {sprint_num})")
     cp.save(paths.checkpoint_file)
+
+
+# ── 병렬 분기 finalization + escalation (parallel-branches-design.md 단계 7-8) ──
+#
+# 세션 B(`_handle_parallel_sprint_generation`)가 generator/evaluator 단계를 끝낸 뒤
+# 이 두 함수를 호출한다. 세션 분리 정책상 같은 파일 안에 살지만 기능 단위로 격리.
+
+
+class _NullSpan:
+    """sprint_tracer 미주입 시 안전 fallback."""
+
+    def __enter__(self) -> dict:
+        return {}
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        return None
+
+
+class _NullTracer:
+    """sprint_tracer 미주입 시 안전 fallback (sprint_totals 0 반환)."""
+
+    def sprint_totals(self) -> dict:
+        return {
+            "duration_seconds": 0,
+            "tokens_input": 0,
+            "tokens_output": 0,
+            "tokens_cache": 0,
+        }
+
+    def span(self, *args, **kwargs):
+        return _NullSpan()
+
+    def finalize(self, *args, **kwargs) -> None:
+        return None
+
+
+def _extract_scores_for_branch(paths: ProjectPaths, branch_id: str) -> str:
+    """분기별 qa-report.md에서 score 한 줄 요약 (병렬 알림용)."""
+    bp = paths.branch_paths(branch_id) if branch_id != "trunk" else paths
+    if not bp.qa_report.exists():
+        return ""
+    scores: dict[str, int] = {}
+    text = bp.qa_report.read_text(encoding="utf-8", errors="replace")
+    for m in _SCORE_RE.finditer(text):
+        scores[m.group(1).strip()] = int(m.group(2))
+    if not scores:
+        return ""
+    items = list(scores.items())[:3]
+    return ", ".join(f"{k} {v}/10" for k, v in items)
+
+
+def _collect_branch_summary(paths: ProjectPaths, branch_states: list) -> list[dict]:
+    """checkpoint.branches 리스트에서 알림용 summary dict 추출.
+
+    원소는 BranchState (pydantic) 또는 (id, status, fails) 튜플 등 어떤 형태든 받을 수
+    있게 duck-typing.
+    """
+    summaries: list[dict] = []
+    for bs in branch_states:
+        bid = getattr(bs, "branch_id", None) or (
+            bs[0] if isinstance(bs, (list, tuple)) else "?"
+        )
+        status_raw = getattr(bs, "status", None) or (
+            bs[1] if isinstance(bs, (list, tuple)) and len(bs) > 1 else ""
+        )
+        cfails = getattr(bs, "consecutive_fails", None) or (
+            bs[2] if isinstance(bs, (list, tuple)) and len(bs) > 2 else 0
+        )
+        if str(status_raw).lower() in ("passed", "pass"):
+            status = "PASS"
+        elif str(status_raw).lower() in ("failed", "fail", "escalated"):
+            status = "FAIL"
+        else:
+            status = str(status_raw).upper() or "?"
+        summaries.append(
+            {
+                "branch_id": bid,
+                "status": status,
+                "score": _extract_scores_for_branch(paths, bid),
+                "consecutive_fails": int(cfails or 0),
+            }
+        )
+    return summaries
+
+
+def _handle_parallel_sprint_finalization(
+    config: ForgeConfig,
+    paths: ProjectPaths,
+    sprint_num: int,
+    branches: list,
+    worktrees: list,
+    *,
+    notifier: NotifierAdapter,
+    sprint_tracer=None,
+):
+    """병렬 sprint의 finalizer 호출 + 결과 처리 (단계 7).
+
+    호출자가 generator/evaluator를 끝내고 이 함수를 호출. 반환된 FinalizeResult의
+    status를 보고 분기:
+    - "merged": 전체 머지 성공 → worktree 정리 + auto_commit_trunk_artifacts
+    - "merged_partial": 부분 머지 성공 (partial=True 호출 경로)
+    - "needs_escalation": _handle_parallel_sprint_escalation으로 후속 처리
+    - "merge_conflict" / "scope_violation" / "error": 사용자 게이트
+    """
+    from .agents.finalizer import run_finalize
+    from .worktree import auto_commit_trunk_artifacts, remove_branch_worktrees
+
+    span_ctx = (
+        sprint_tracer.span("finalizer") if sprint_tracer is not None else _NullSpan()
+    )
+    with span_ctx as info:
+        info["input"] = (
+            f"[finalizer/sprint-{sprint_num}] merging {len(branches)} branches"
+        )
+        result = run_finalize(
+            config,
+            paths,
+            branches,
+            worktrees,
+            partial=False,
+            sprint_num=sprint_num,
+            notifier=notifier,
+        )
+        info["stdout"] = result.detail
+
+    if result.status == "merged":
+        try:
+            remove_branch_worktrees(paths.trunk_root, worktrees)
+        except Exception as e:
+            console.print(f"[yellow]worktree 정리 실패 (무시): {e}[/yellow]")
+        try:
+            auto_commit_trunk_artifacts(
+                paths.trunk_root, "finalizer-merge", sprint_num
+            )
+        except Exception as e:
+            console.print(
+                f"[yellow]trunk artifacts 자동 커밋 실패 (무시): {e}[/yellow]"
+            )
+        return result
+
+    if result.status == "needs_escalation":
+        return result
+
+    if result.status == "merge_conflict":
+        notifier.notify(
+            "warning",
+            (
+                f"Sprint {sprint_num} finalizer 머지 충돌 - 의미적 충돌로 abort.\n\n"
+                f"파일: {', '.join(result.conflict_files) or '(목록 없음)'}\n"
+                f"detail: {result.detail}\n\n"
+                f"`artifacts/.merge-decisions/escalation-{sprint_num}.md` 참조.\n\n"
+                f"/resume - 사용자 수동 머지 후 진행\n"
+                f"/stop - 여기서 중단"
+            ),
+            project_name=paths.project_name,
+            buttons=[["/resume", "/stop"]],
+        )
+        return result
+
+    if result.status == "scope_violation":
+        violating = (
+            ", ".join(result.violation.violating_files[:5])
+            if result.violation
+            else "?"
+        )
+        notifier.notify(
+            "warning",
+            (
+                f"Sprint {sprint_num} finalizer 스코프 위반 - 자동 revert 수행.\n\n"
+                f"충돌 안 났던 파일을 수정함: {violating}\n"
+                f"detail: {result.detail}\n\n"
+                f"/resume - revert된 상태에서 재시도\n"
+                f"/stop - 여기서 중단"
+            ),
+            project_name=paths.project_name,
+            buttons=[["/resume", "/stop"]],
+        )
+        return result
+
+    notifier.notify(
+        "error",
+        f"Sprint {sprint_num} finalizer 비정상 종료: {result.status} - {result.detail}",
+        project_name=paths.project_name,
+    )
+    return result
+
+
+def _handle_parallel_sprint_escalation(
+    config: ForgeConfig,
+    paths: ProjectPaths,
+    sprint_num: int,
+    branches: list,
+    worktrees: list,
+    branch_states: list,
+    *,
+    notifier: NotifierAdapter,
+    sprint_tracer=None,
+) -> dict:
+    """FAIL 분기 escalation 처리 (단계 8-2).
+
+    흐름:
+    1. PASS 분기 부분 머지 (run_finalize(partial=True)). PASS worktree만 정리.
+    2. FAIL worktree는 보존 (다음 라운드 Planner 참조용).
+    3. auto_commit_trunk_artifacts("finalizer-partial-merge").
+    4. 일괄 알림 1건 발사.
+    5. 사용자 게이트 (/resume → Planner 재호출 / /skip / /stop).
+
+    반환:
+        {"user_decision": ..., "partial_merge_status": ...,
+         "pass_branches": [...], "fail_branches": [...]}
+
+    Planner 재호출 자체는 세션 B 통합 시점에서 처리 (plan-review 게이트 우회).
+    """
+    from .agents.finalizer import run_finalize
+    from .worktree import auto_commit_trunk_artifacts, remove_branch_worktrees
+
+    pass_branches = []
+    fail_branches = []
+    for spec in branches:
+        bid = getattr(spec, "id", None) or getattr(spec, "branch_id", "")
+        if not bid:
+            continue
+        bp = paths.branch_paths(bid)
+        if ev.is_pass(bp):
+            pass_branches.append(spec)
+        else:
+            fail_branches.append(spec)
+
+    pass_ids = [
+        getattr(s, "id", None) or getattr(s, "branch_id", "") for s in pass_branches
+    ]
+    fail_ids = [
+        getattr(s, "id", None) or getattr(s, "branch_id", "") for s in fail_branches
+    ]
+
+    partial_merge_status = "skipped"
+
+    if pass_branches:
+        pass_worktrees = [wt for wt in worktrees if wt.branch_id in pass_ids]
+        span_ctx = (
+            sprint_tracer.span("finalizer-partial")
+            if sprint_tracer is not None
+            else _NullSpan()
+        )
+        with span_ctx as info:
+            info["input"] = (
+                f"[finalizer-partial/sprint-{sprint_num}] "
+                f"PASS={len(pass_branches)} FAIL={len(fail_branches)}"
+            )
+            part_result = run_finalize(
+                config,
+                paths,
+                pass_branches,
+                pass_worktrees,
+                partial=True,
+                round_num=1,
+                sprint_num=sprint_num,
+                notifier=notifier,
+            )
+            info["stdout"] = part_result.detail
+
+        if part_result.status == "merged_partial":
+            partial_merge_status = "merged_partial"
+            try:
+                remove_branch_worktrees(paths.trunk_root, pass_worktrees)
+            except Exception as e:
+                console.print(
+                    f"[yellow]PASS worktree 정리 실패 (무시): {e}[/yellow]"
+                )
+            try:
+                auto_commit_trunk_artifacts(
+                    paths.trunk_root, "finalizer-partial-merge", sprint_num
+                )
+            except Exception as e:
+                console.print(
+                    f"[yellow]trunk artifacts 자동 커밋 실패 (무시): {e}[/yellow]"
+                )
+
+    summaries = _collect_branch_summary(paths, branch_states)
+    _notify_fail_with_options(
+        notifier,
+        config,
+        sprint_tracer if sprint_tracer is not None else _NullTracer(),
+        sprint_num,
+        paths,
+        consecutive=max((s.get("consecutive_fails", 0) for s in summaries), default=0),
+        branch_summaries=summaries,
+        escalated_branches=fail_ids,
+    )
+
+    decision = wait_for_approval_or_stop(
+        paths, timeout=config.approval_timeout_seconds
+    )
+
+    return {
+        "user_decision": decision,
+        "partial_merge_status": partial_merge_status,
+        "pass_branches": pass_ids,
+        "fail_branches": fail_ids,
+    }
 
 
 # ── 메인 사이클 ─────────────────────────────────────────────────────────────
