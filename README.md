@@ -16,6 +16,7 @@
 # 1) 설치 (한 번만)
 git clone https://github.com/HWAIN/THE_FORGE.git && cd THE_FORGE
 uv sync && uv tool install .
+# 코드 수정 후 재배포는: python scripts/deploy.py  (docs/DEV.md §4)
 
 # 2) 전역 설정 마법사 — Slack 또는 Telegram 토큰 입력 (한 번만)
 forge setup
@@ -277,7 +278,7 @@ forge run
 | 문서 | 대상 | 내용 |
 |---|---|---|
 | [docs/USER_GUIDE.md](./docs/USER_GUIDE.md) | 사용자 | 설치·실행·설정·트러블슈팅·복구 시나리오 전체 |
-| [docs/DEV.md](./docs/DEV.md) | 기여자 | 테스트·린트·코드 레퍼런스 (파일:라인) |
+| [docs/DEV.md](./docs/DEV.md) | 기여자 | 테스트·린트·재배포(`python scripts/deploy.py`)·코드 레퍼런스 |
 | [docs/핵심기술.md](./docs/핵심기술.md) | 설계 심화 | 아키텍처 내부 설계 · 결정 배경 |
 
 막힌 에러가 있다면 [USER_GUIDE 에러 빠른 찾기](./docs/USER_GUIDE.md#에러-빠른-찾기) 표에서 메시지로 검색.
