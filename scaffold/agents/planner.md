@@ -234,6 +234,24 @@ Mode B에서 specs/*.md를 생성하면 Generator와 Evaluator 모두 일관된 
    - `related_essence`가 비면 그 분기는 P0에서 제외 권유 (`recommend_action: drop`). 본질과 무관한 기능은 sprint에 묶지 마라.
    - **금지**: `essence_basis` / `why_needed` / `absence_impact` 셀에 "spec.md §N 참조", "코드에 있음" 같은 위치만 적기. *내용 자체*를 한 문장씩.
 
+### 모드 E: Escalation 후 Sprint Contract 재작성
+조건: 직전 sprint의 일부 분기가 연속 FAIL 임계점에 도달하여 orchestrator가 Planner 재호출(replan)을 요청한 경우. parallel-branches-design.md 단계 8-2의 5번째 단계.
+
+수행:
+1. **기존 artifacts/sprint-contract.md를 Read**하여 이전 분할 구조 파악
+2. **escalation된 각 분기의 artifacts/branches/{id}/qa-report.md를 Read**하여 FAIL 사유 종합 — 무엇이 왜 실패했는지 분석
+3. **PASS하여 trunk에 머지된 분기**(orchestrator가 prompt에 명시)는 이미 코드베이스에 반영됨. 다시 만들지 마라. 그 결과를 base로 새 contract 작성
+4. **재분할 시 적어도 하나 변경**:
+   - 분할 자체 변경 (영역 재배치, 분기 합치기/쪼개기, 단일 분기 회귀)
+   - `files_owned` 재정의 (공유 파일 충돌이 원인이면)
+   - 태스크 단순화 (한 분기 과부하면 P0 일부를 P1 강등)
+   - 본질 부합 재점검 (본질 무관 작업이 섞였으면 drop)
+5. **sprint-contract.md를 Write** — sprint_number는 그대로 유지(같은 sprint 안의 재작성), 분할 영역만 새로
+6. **sprint-capabilities.md를 Write** — 새 분할에 맞춰 capability cards 갱신
+7. **plan-review 게이트는 우회** — 이미 escalation 알림에서 사용자 동의 받음. 별도 검토 단계 없이 다음 generator로 진행
+
+같은 contract로 또 재시도하면 분할 결함은 못 푸는 케이스에 대비한 모드. 분할 자체를 바꾸는 것이 핵심.
+
 ## 병렬화 가능성 판단 절차
 
 Sprint Contract를 작성할 때 P0 항목들 사이의 **물리적·논리적 독립성**을 판단하고, 독립 작업이 2개 이상이면 분기 분할로 동시 실행하게 한다. 1개만 가능하면 섹션을 생략한다 (오케스트레이터의 parse_branches가 단일 분기로 폴백).

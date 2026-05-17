@@ -358,3 +358,150 @@ def test_escalation_all_fail_skips_partial_merge(
     assert out["partial_merge_status"] == "skipped"
     assert out["user_decision"] == "stop"
     notifier.notify.assert_called_once()
+
+
+# ── _handle_planner_replan_after_escalation (parallel-branches-design.md 단계 8-2 5번째) ──
+
+
+def _touch_contract(paths: ProjectPaths, content: str = "# sprint-contract\n") -> float:
+    paths.sprint_contract.parent.mkdir(parents=True, exist_ok=True)
+    paths.sprint_contract.write_text(content, encoding="utf-8")
+    return paths.sprint_contract.stat().st_mtime
+
+
+def test_planner_replan_success_removes_fail_worktrees(fake_config, fake_paths, tmp_path, monkeypatch):
+    """Mode E가 contract mtime 갱신 시: FAIL worktree 정리 + status=replanned."""
+    _touch_contract(fake_paths, "# old contract\n")
+
+    def fake_run(*args, **kwargs):
+        # Mode E가 sprint-contract.md를 새로 쓴 것처럼 mtime 진행
+        fake_paths.sprint_contract.write_text("# new contract after replan\n", encoding="utf-8")
+        import os
+        now = fake_paths.sprint_contract.stat().st_mtime
+        os.utime(fake_paths.sprint_contract, (now + 5, now + 5))
+        return SimpleNamespace(stdout="ok", stderr="", returncode=0)
+
+    removed_calls = []
+    commit_calls = []
+
+    def fake_remove(root, wts):
+        removed_calls.append([wt.branch_id for wt in wts])
+
+    def fake_commit(root, turn_kind, sprint_num):
+        commit_calls.append((turn_kind, sprint_num))
+        return SimpleNamespace(status="committed", commit_message=turn_kind)
+
+    monkeypatch.setattr(orch.pl, "run_plan_replan", fake_run)
+    monkeypatch.setattr("forge.worktree.remove_branch_worktrees", fake_remove)
+    monkeypatch.setattr("forge.worktree.auto_commit_trunk_artifacts", fake_commit)
+
+    worktrees = [
+        _wt("branch-1", tmp_path / ".worktrees/sprint-1-branch-1"),  # PASS, 정리 X
+        _wt("branch-2", tmp_path / ".worktrees/sprint-1-branch-2"),  # FAIL, 정리 O
+    ]
+    notifier = MagicMock()
+
+    out = orch._handle_planner_replan_after_escalation(
+        fake_config, fake_paths,
+        sprint_num=1,
+        escalated_branch_ids=["branch-2"],
+        passed_branch_ids=["branch-1"],
+        worktrees=worktrees,
+        notifier=notifier,
+    )
+
+    assert out["status"] == "replanned"
+    assert out["fail_worktrees_removed"] == 1
+    assert removed_calls == [["branch-2"]]
+    assert ("planner-replan", 1) in commit_calls
+    # info 알림 1건 발사
+    assert notifier.notify.called
+
+
+def test_planner_replan_mtime_unchanged_returns_planner_failed(
+    fake_config, fake_paths, tmp_path, monkeypatch
+):
+    """Mode E가 sprint-contract.md mtime을 안 갱신하면 status=planner_failed + 게이트 알림."""
+    _touch_contract(fake_paths, "# unchanged contract\n")
+
+    def fake_run(*args, **kwargs):
+        # Write 안 함 (mtime 그대로)
+        return SimpleNamespace(stdout="text-only", stderr="", returncode=0)
+
+    monkeypatch.setattr(orch.pl, "run_plan_replan", fake_run)
+    monkeypatch.setattr("forge.worktree.remove_branch_worktrees", lambda *a, **k: None)
+    monkeypatch.setattr("forge.worktree.auto_commit_trunk_artifacts", lambda *a, **k: None)
+
+    worktrees = [_wt("branch-2", tmp_path / ".worktrees/sprint-1-branch-2")]
+    notifier = MagicMock()
+
+    out = orch._handle_planner_replan_after_escalation(
+        fake_config, fake_paths,
+        sprint_num=2,
+        escalated_branch_ids=["branch-2"],
+        passed_branch_ids=[],
+        worktrees=worktrees,
+        notifier=notifier,
+    )
+
+    assert out["status"] == "planner_failed"
+    assert out["fail_worktrees_removed"] == 0
+    assert "mtime not updated" in out["detail"]
+    notifier.notify.assert_called_once()
+
+
+def test_planner_replan_exception_returns_planner_failed(
+    fake_config, fake_paths, tmp_path, monkeypatch
+):
+    """Mode E 호출 자체가 예외를 던지면 status=planner_failed + error 알림."""
+    _touch_contract(fake_paths)
+
+    def fake_run(*args, **kwargs):
+        raise RuntimeError("simulated planner crash")
+
+    monkeypatch.setattr(orch.pl, "run_plan_replan", fake_run)
+
+    notifier = MagicMock()
+    out = orch._handle_planner_replan_after_escalation(
+        fake_config, fake_paths,
+        sprint_num=1,
+        escalated_branch_ids=["branch-2"],
+        passed_branch_ids=[],
+        worktrees=[],
+        notifier=notifier,
+    )
+
+    assert out["status"] == "planner_failed"
+    assert "simulated planner crash" in out["detail"]
+    notifier.notify.assert_called_once()
+
+
+def test_planner_replan_no_escalated_branches_still_works(
+    fake_config, fake_paths, tmp_path, monkeypatch
+):
+    """edge case: escalated_branch_ids 빈 리스트여도 mtime 갱신되면 replanned 반환."""
+    _touch_contract(fake_paths, "# old\n")
+
+    def fake_run(*args, **kwargs):
+        fake_paths.sprint_contract.write_text("# new\n", encoding="utf-8")
+        import os
+        now = fake_paths.sprint_contract.stat().st_mtime
+        os.utime(fake_paths.sprint_contract, (now + 5, now + 5))
+        return SimpleNamespace(stdout="ok", stderr="", returncode=0)
+
+    monkeypatch.setattr(orch.pl, "run_plan_replan", fake_run)
+    monkeypatch.setattr("forge.worktree.remove_branch_worktrees", lambda *a, **k: None)
+    monkeypatch.setattr("forge.worktree.auto_commit_trunk_artifacts", lambda *a, **k: None)
+
+    notifier = MagicMock()
+    out = orch._handle_planner_replan_after_escalation(
+        fake_config, fake_paths,
+        sprint_num=1,
+        escalated_branch_ids=[],
+        passed_branch_ids=["branch-1", "branch-2"],
+        worktrees=[],
+        notifier=notifier,
+    )
+
+    assert out["status"] == "replanned"
+    assert out["fail_worktrees_removed"] == 0

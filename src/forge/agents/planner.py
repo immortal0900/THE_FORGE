@@ -340,6 +340,95 @@ def run_contract(
     )
 
 
+def run_plan_replan(
+    sprint_num: int,
+    escalated_branch_ids: list[str],
+    passed_branch_ids: list[str],
+    config: ForgeConfig,
+    paths: ProjectPaths,
+    essence: Optional[EssenceSource] = None,
+    on_question: Optional[AskUserCallback] = None,
+    notifier=None,
+) -> RunResult:
+    """모드 E — escalation 후 sprint-contract.md 재작성.
+
+    parallel-branches-design.md 단계 8-2의 5번째 단계 ("Planner 재호출").
+    이전 contract의 일부 분기가 FAIL 임계점에 도달했을 때 호출된다.
+    같은 contract로 또 재시도하면 분할 결함은 못 푸는 케이스에 대비.
+
+    Mode C(run_contract)와 유사하지만 다음 추가 컨텍스트를 prompt에 인용:
+    - 이전 sprint-contract.md (재작성 대상)
+    - escalated_branch_ids: 임계점 도달한 분기 id 목록
+    - 그 분기들의 artifacts/branches/{id}/qa-report.md (FAIL 사유)
+    - passed_branch_ids: 이미 trunk에 머지된 분기 id 목록 (다시 만들 필요 없음)
+
+    출력: 같은 위치(artifacts/sprint-contract.md + artifacts/sprint-capabilities.md)
+    재기록. plan-review 게이트는 우회 (이미 escalation 알림에서 동의 받음).
+    """
+    essence_block = _format_essence_for_prompt(essence) + "\n" if essence else ""
+    escalated_section = ""
+    if escalated_branch_ids:
+        bullet_lines = "\n".join(f"  - {bid}" for bid in escalated_branch_ids)
+        qa_paths = "\n".join(
+            f"  - artifacts/branches/{bid}/qa-report.md" for bid in escalated_branch_ids
+        )
+        escalated_section = (
+            "## 재작성 컨텍스트: escalation된 분기\n"
+            "다음 분기가 임계점에 도달해 같은 contract로는 더 못 풀음:\n"
+            f"{bullet_lines}\n\n"
+            "각 분기의 qa-report.md를 반드시 Read하여 **무엇이 왜 실패했는지** 확인하라:\n"
+            f"{qa_paths}\n\n"
+            "FAIL 원인 분석 후 contract 재작성 시 다음 중 하나 이상을 적용하라:\n"
+            "1. **분할 자체 변경** — 같은 영역을 다르게 쪼개거나, 합치거나, 한 분기로 묶는다.\n"
+            "2. **files_owned 재정의** — 분기 간 공유 파일 충돌이 원인이면 owned 영역 재배치.\n"
+            "3. **태스크 단순화** — 한 분기가 과한 책임을 졌으면 P0 항목 일부 P1로 강등.\n"
+            "4. **본질 부합 재점검** — 본질과 무관한 작업이 분기에 섞였으면 drop 권유.\n\n"
+        )
+    passed_section = ""
+    if passed_branch_ids:
+        passed_bullets = "\n".join(f"  - {bid}" for bid in passed_branch_ids)
+        passed_section = (
+            "## 이미 통합된 분기 (다시 만들지 마라)\n"
+            "다음 분기는 PASS하여 이미 trunk에 머지됐다. 그 작업물은 코드베이스에 반영되어 있다:\n"
+            f"{passed_bullets}\n\n"
+            "**이 분기들의 결과를 base로** 새 contract를 작성하라. 같은 일을 또 시키지 말 것.\n\n"
+        )
+    prompt = (
+        f"{essence_block}"
+        f"# Mode E — Sprint {sprint_num} Contract 재작성 (escalation 후 재분할)\n\n"
+        f"## 필수 규칙 (위반 시 세션 실패)\n"
+        f"1. **이 세션은 반드시 Write 도구를 호출하여 artifacts/sprint-contract.md를 "
+        f"다시 작성한 뒤 종료해야 한다.** 텍스트로만 답변하고 Write 없이 끝내는 것은 허용되지 않는다.\n"
+        f"2. templates/sprint-contract-template.md 형식을 따르라.\n"
+        f"3. spec.md / specs/ / progress-log.md / sprint-*-done.md를 반영하라.\n"
+        f"4. **sprint-contract.md 재작성 직후 곧이어 Write 도구로 "
+        f"artifacts/sprint-capabilities.md도 다시 작성하라.** "
+        f"분기 분할이 바뀌었으므로 capability cards도 새 분할에 맞춰 갱신.\n\n"
+        f"{escalated_section}"
+        f"{passed_section}"
+        f"## 작성 절차\n"
+        f"1. 기존 artifacts/sprint-contract.md를 Read하여 이전 분할 구조 파악\n"
+        f"2. 위 escalation 분기들의 qa-report.md를 Read하여 FAIL 사유 종합\n"
+        f"3. spec.md essence_axioms 재확인\n"
+        f"4. 새 sprint-contract.md를 Write — sprint_number={sprint_num} 그대로 유지, "
+        f"분할(Parallel Task Graph YAML) 부분만 새로 짜기\n"
+        f"5. sprint-capabilities.md를 Write — 새 분할의 capability cards로 갱신\n\n"
+        f"{_CAPABILITY_GUIDE}"
+        f"## 실패 모드\n"
+        f"Write 미호출 종료 시 orchestrator가 sprint-contract.md mtime 미갱신을 감지하여 "
+        f"escalation을 한 번 더 띄운다. 반드시 Write 실행 후 종료하라."
+    )
+    return run_agent_sync(
+        "planner",
+        paths.project_root,
+        prompt,
+        max_turns=config.contract_max_turns,
+        on_question=on_question,
+        whisper_queue_path=paths.whisper_queue,
+        notifier=notifier,
+    )
+
+
 def run_revise(
     revise_text: str,
     config: ForgeConfig,

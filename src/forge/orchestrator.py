@@ -1285,6 +1285,145 @@ def _handle_parallel_sprint_escalation(
     }
 
 
+def _handle_planner_replan_after_escalation(
+    config: ForgeConfig,
+    paths: ProjectPaths,
+    sprint_num: int,
+    escalated_branch_ids: list[str],
+    passed_branch_ids: list[str],
+    worktrees: list,
+    *,
+    essence=None,
+    notifier: NotifierAdapter,
+    sprint_tracer=None,
+) -> dict:
+    """parallel-branches-design.md 단계 8-2의 5번째 단계 — Planner Mode E 재호출.
+
+    호출 직전 상태 (escalation handler 종료 후):
+    - PASS 분기 결과는 이미 trunk에 머지됨
+    - FAIL 분기 worktree는 보존됨 (Planner가 qa-report를 읽기 위해)
+    - 사용자가 /resume 또는 /eval 결정으로 escalation 알림 답한 직후
+
+    이 함수가 하는 일:
+    1. Planner Mode E 호출 (pl.run_plan_replan) → 새 sprint-contract.md 작성
+    2. mtime 미갱신이면 Planner 실패 알림 + status="planner_failed" 반환
+       (호출자가 사용자 게이트 또는 max_consecutive_fails 진행 결정)
+    3. mtime 갱신됐으면:
+       a. 보존됐던 FAIL 분기 worktree 정리 (새 contract 기준으로 다시 분기할 거라 옛 worktree 무의미)
+       b. auto_commit_trunk_artifacts("planner-replan") — 새 contract를 trunk 커밋해야
+          다음 worktree 생성 시 sync됨
+       c. status="replanned" 반환
+
+    plan-review 게이트는 호출하지 않음 (sprint 2+ 자동 진행 정책 일관 + escalation 알림에서
+    이미 사용자 동의 받음).
+
+    반환:
+        {"status": "replanned" | "planner_failed",
+         "fail_worktrees_removed": int,
+         "detail": str}
+    """
+    from .worktree import auto_commit_trunk_artifacts, remove_branch_worktrees
+
+    span_ctx = (
+        sprint_tracer.span("planner-replan", mode="claude-p")
+        if sprint_tracer is not None
+        else _NullSpan()
+    )
+
+    contract_mtime_before = (
+        paths.sprint_contract.stat().st_mtime if paths.sprint_contract.exists() else 0
+    )
+
+    with span_ctx as info:
+        info["input"] = (
+            f"[planner-replan/sprint-{sprint_num}] "
+            f"escalated={escalated_branch_ids} passed={passed_branch_ids}"
+        )
+        try:
+            result = pl.run_plan_replan(
+                sprint_num,
+                escalated_branch_ids,
+                passed_branch_ids,
+                config,
+                paths,
+                essence=essence,
+                notifier=notifier,
+            )
+            info["stdout"] = (result.stdout or "")[:2000]
+        except Exception as exc:
+            notifier.notify(
+                "error",
+                f"Sprint {sprint_num} Planner replan(Mode E) 호출 중 예외: {exc}\n\n"
+                f"/resume - 같은 contract로 재시도 (기존 동작)\n"
+                f"/stop - 중단",
+                project_name=paths.project_name,
+                buttons=[["/resume", "/stop"]],
+            )
+            return {
+                "status": "planner_failed",
+                "fail_worktrees_removed": 0,
+                "detail": f"exception: {exc}",
+            }
+
+    contract_mtime_after = (
+        paths.sprint_contract.stat().st_mtime if paths.sprint_contract.exists() else 0
+    )
+    if contract_mtime_after <= contract_mtime_before:
+        notifier.notify(
+            "warning",
+            (
+                f"Sprint {sprint_num} Planner Mode E가 sprint-contract.md를 재작성하지 못함 "
+                f"(mtime 미갱신).\n\n같은 contract로 재시도하면 같은 FAIL이 반복될 수 있음.\n\n"
+                f"/resume - 그래도 같은 contract로 재시도\n"
+                f"/stop - 중단"
+            ),
+            project_name=paths.project_name,
+            buttons=[["/resume", "/stop"]],
+        )
+        return {
+            "status": "planner_failed",
+            "fail_worktrees_removed": 0,
+            "detail": "sprint-contract.md mtime not updated",
+        }
+
+    fail_worktrees = [wt for wt in worktrees if wt.branch_id in escalated_branch_ids]
+    removed_count = 0
+    if fail_worktrees:
+        try:
+            remove_branch_worktrees(paths.trunk_root, fail_worktrees)
+            removed_count = len(fail_worktrees)
+        except Exception as exc:
+            console.print(
+                f"[yellow]escalation FAIL worktree 정리 실패 (무시, 새 worktree 생성은 진행): {exc}[/yellow]"
+            )
+
+    try:
+        auto_commit_trunk_artifacts(
+            paths.trunk_root, "planner-replan", sprint_num
+        )
+    except Exception as exc:
+        console.print(
+            f"[yellow]planner-replan trunk artifacts 자동 커밋 실패 (무시): {exc}[/yellow]"
+        )
+
+    notifier.notify(
+        "info",
+        (
+            f"Sprint {sprint_num} Planner Mode E 완료 — "
+            f"contract 재분할 후 generator 재진입.\n\n"
+            f"재작성된 분기 영역 (이전 escalation): {', '.join(escalated_branch_ids) or '(없음)'}\n"
+            f"이미 trunk에 머지된 분기 (재작성 제외): {', '.join(passed_branch_ids) or '(없음)'}"
+        ),
+        project_name=paths.project_name,
+    )
+
+    return {
+        "status": "replanned",
+        "fail_worktrees_removed": removed_count,
+        "detail": f"new sprint-contract.md written; {removed_count} FAIL worktree(s) removed",
+    }
+
+
 # ── 메인 사이클 ─────────────────────────────────────────────────────────────
 
 
@@ -2064,12 +2203,38 @@ def run_cycle(
                         sprints_run += 1
                         sprint_tracer.finalize(status="skipped")
                         continue
-                    # resume / eval: 다시 같은 sprint 재시도. FAIL 분기 worktree는
-                    # 보존된 상태이므로 generator/evaluator 재실행으로 회복 시도.
-                    cp = Checkpoint(
-                        phase=Phase.CONTRACT_DONE,
-                        detail=f"sprint-{sprint_num} escalation retry",
+                    # resume / eval: parallel-branches-design.md 단계 8-2의 5번째 단계 —
+                    # Planner Mode E로 sprint-contract.md 재작성 시도.
+                    # 성공 시: FAIL 분기 worktree 정리 + 새 contract로 generator 재진입.
+                    # 실패 시 (Planner가 Write 못함): 기존 동작 fallback (같은 contract 재시도).
+                    replan_result = _handle_planner_replan_after_escalation(
+                        config,
+                        paths,
+                        sprint_num,
+                        escalated_branch_ids=esc_result.get("fail_branches", []),
+                        passed_branch_ids=esc_result.get("pass_branches", []),
+                        worktrees=worktrees,
+                        essence=essence,
+                        notifier=notifier,
+                        sprint_tracer=sprint_tracer,
                     )
+                    if replan_result["status"] == "replanned":
+                        # 새 contract로 같은 sprint 안에서 다시 generator/evaluator 진입.
+                        # 다음 라운드는 새 분할에 맞춰 worktree를 새로 만든다.
+                        cp = Checkpoint(
+                            phase=Phase.CONTRACT_DONE,
+                            detail=(
+                                f"sprint-{sprint_num} replanned after escalation "
+                                f"({replan_result['fail_worktrees_removed']} FAIL worktree(s) cleaned)"
+                            ),
+                        )
+                    else:
+                        # Planner replan 실패: 기존 동작대로 같은 contract 그대로 재시도.
+                        # FAIL 분기 worktree는 보존된 상태라 generator/evaluator 재실행으로 회복 시도.
+                        cp = Checkpoint(
+                            phase=Phase.CONTRACT_DONE,
+                            detail=f"sprint-{sprint_num} escalation retry (replan failed: {replan_result['detail']})",
+                        )
                     cp.save(paths.checkpoint_file)
                     sprints_run += 1
                     sprint_tracer.finalize(status="interrupted")
