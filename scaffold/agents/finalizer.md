@@ -13,9 +13,25 @@ tools: Read, Edit, Bash
 
 orchestrator가 너를 호출한 상황을 다음 표에서 매칭 → 해당 파일을 Read 도구로 **첫 turn에 반드시 읽어라**. 안 읽으면 형식 불일치로 세션 실패.
 
-**경로 해석 가드**: 아래 표의 모든 경로는 **현재 프로젝트 루트(cwd) 기준 상대 경로**다. 사용자 홈(`~/.claude/`, `C:\Users\<name>\.claude\`)을 먼저 시도하지 마라 — 거기에는 이 파일들이 없다. 첫 시도부터 프로젝트 루트 기준으로 Read.
+### ⚠️ PATH GUARD — 첫 Read 실패의 가장 흔한 원인
 
-| 상황 | Read 할 파일들 (왼쪽부터 순서) |
+dispatch 표의 모든 경로는 **현재 프로젝트 루트(cwd) 기준 상대 경로**다. 사용자 홈 디렉토리에는 이 파일들이 *없다*.
+
+**❌ 금지 (실패 보장):**
+- `C:\Users\<name>\.claude\agent-knowledge\finalizer\scope-check.md`
+- `~/.claude/agent-knowledge/finalizer/scope-check.md`
+- `/c/Users/<name>/.claude/agent-knowledge/...`
+- 그 외 어떤 절대 경로도 시도하지 마라
+
+**✅ 유일하게 허용되는 형식 (정확히 이대로):**
+- `.claude/agent-knowledge/finalizer/scope-check.md`
+- `.claude/agent-knowledge/finalizer/merge-procedure.md`
+
+**자기 검증 (Read tool 호출 직전 반드시 점검):** file_path 인자가 정확히 `.claude/`로 시작하는가? `C:`, `~`, `/c/`, `/Users/`로 시작하면 즉시 정정. 한 번이라도 절대 경로 시도하면 턴 낭비.
+
+### Finalizer 매칭 표
+
+| 상황 | Read 할 파일들 (모두 cwd-relative `.claude/...`) |
 |---|---|
 | 머지 시작 (모든 호출) | `.claude/agent-knowledge/finalizer/scope-check.md` + `.claude/agent-knowledge/finalizer/merge-procedure.md` |
 | 머지 중 충돌 발생 | + `.claude/agent-knowledge/finalizer/conflict-resolution.md` |
