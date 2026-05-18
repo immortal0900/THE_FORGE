@@ -86,7 +86,7 @@ class ForgeConfig(BaseSettings):
     # ── 병렬 분기 (parallel-branches-design.md 단계 0) ──
     # 최대 동시 분기 수. 기본 1 = 직렬 모드 (기존 동작과 동일, 회귀 0).
     # 캡: 1 <= N <= 4. 환경변수 FORGE_MAX_PARALLEL_BRANCHES.
-    max_parallel_branches: int = 1
+    max_parallel_branches: int = 4
     # 한 분기가 몇 번 연속 실패하면 Planner 재호출(escalation)을 발사할지.
     # 캡: 1 <= N <= 10. 환경변수 FORGE_BRANCH_FAIL_ESCALATE_THRESHOLD.
     branch_fail_escalate_threshold: int = 2

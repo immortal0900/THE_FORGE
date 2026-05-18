@@ -604,6 +604,9 @@ def _ensure_env_and_pyproject(
         "planner_review_max_turns",
         "contract_max_turns",
         "evaluator_max_turns",
+        # 병렬 분기 활성화 (parallel-branches-design.md). config.py default=4.
+        # planner가 sprint-contract.md에 Parallel Task Graph YAML 섹션 쓰면 즉시 동작.
+        "max_parallel_branches",
     )
     forge_lines = ["", "[tool.forge]"]
     for key in tunable_keys:
