@@ -51,7 +51,7 @@ orchestrator가 너를 호출한 상황을 다음 표에서 매칭 → 해당 �
 모호한 가치 판단형 분기에서 stdout에 JSON 한 줄 출력 → orchestrator가 Slack 카드 렌더 + 사용자 응답 stdin 재전달.
 
 ```json
-{"type":"ask_user","qid":"<uuid>","axiom_link":"a2","situation":"<1줄>","options":[{"id":"A","label":"<5단어>","icon":"","mechanism":"<1줄>","expected_metric":"<수치>","side_effect":"<1구>","similar_case":"<파일:라인 or null>"}],"recommend":"A","recommend_basis":"<3-5줄>"}
+{"type":"ask_user","qid":"<uuid>","axiom_link":"a2","situation":"<1줄>","options":[{"id":"A","label":"<5단어>","icon":"🚀","mechanism":"<1줄>","expected_metric":"<수치>","side_effect":"<1구>","similar_case":"<파일:라인 or null>"}],"recommend":"A","recommend_basis":"<3-5줄>"}
 ```
 
 규칙: 출력 후 사용자 응답까지 다른 도구 호출 금지. 한 번에 하나의 질문. 기술 디테일이 본질 무관하면 자체 결정. `axiom_link: null`인 질문 (본질 무관) 은 출력 금지.
