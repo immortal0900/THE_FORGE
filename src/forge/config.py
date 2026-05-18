@@ -50,17 +50,17 @@ class ForgeConfig(BaseSettings):
     langfuse_host: str = "https://cloud.langfuse.com"
 
     # ── 공유 설정 (pyproject.toml [tool.forge]에서 로드) ──
-    max_sprint_minutes: int = 500
-    max_generator_minutes: int = 400
+    max_sprint_minutes: int = 5000
+    max_generator_minutes: int = 4000
     # Mode A는 spec.md + plan-review.md + Axiom Verdicts 표(5-7행) + whisper 응답을
     # 한 세션에서 처리하므로 turn 여유가 필요. Mode B(review)도 verdict 표 작성을
     # 의무화했으니 동일 수준.
-    planner_max_turns: int = 60
-    planner_review_max_turns: int = 60
-    contract_max_turns: int = 60
-    evaluator_max_turns: int = 100
-    generator_max_turns: int = 180
-    journal_max_turns: int = 80
+    planner_max_turns: int = 200
+    planner_review_max_turns: int = 200
+    contract_max_turns: int = 200
+    evaluator_max_turns: int = 500
+    generator_max_turns: int = 500
+    journal_max_turns: int = 200
 
     playwright_enabled: bool = True
     playwright_timeout_seconds: int = 600
@@ -148,7 +148,9 @@ class ForgeConfig(BaseSettings):
         env_files: tuple[str, ...] = tuple(
             str(p) for p in (global_env, project_env) if p.exists()
         )
-        base = cls(_env_file=env_files if env_files else None)
+        # _env_file은 pydantic-settings BaseSettings.__init__의 런타임 override 매직 kwarg.
+        # 공식 지원이지만 type stub에 안 박혀 있어 type checker가 빨간줄을 그음 → 무시.
+        base = cls(_env_file=env_files if env_files else None)  # type: ignore[call-arg]
 
         # pyproject.toml [tool.forge] → forge.toml [forge] 순으로 읽기
         overrides: dict = {}

@@ -593,17 +593,25 @@ def _ensure_env_and_pyproject(
         )
         env_target.write_text(env_content, encoding="utf-8")
 
-    # pyproject.toml [tool.forge] 추가
-    pyproject = paths.project_root / "pyproject.toml"
-    forge_section = (
-        "\n[tool.forge]\n"
-        "max_sprint_minutes = 180\n"
-        "max_generator_minutes = 120\n"
-        "planner_max_turns = 15\n"
-        "planner_review_max_turns = 10\n"
-        "contract_max_turns = 12\n"
-        "evaluator_max_turns = 20\n"
+    # pyproject.toml [tool.forge] 추가 — ForgeConfig default를 SSoT로 사용
+    # 하드코딩 회피: config.py가 단일 진실 출처, init은 그 값을 그대로 박는다.
+    # 과거 하드코딩(planner_max_turns=15 등)이 config.py default(60)와 어긋나
+    # Mode B/contract가 max-turns 부족으로 잘리는 회귀 발생했음 → 동적 생성으로 차단.
+    tunable_keys = (
+        "max_sprint_minutes",
+        "max_generator_minutes",
+        "planner_max_turns",
+        "planner_review_max_turns",
+        "contract_max_turns",
+        "evaluator_max_turns",
     )
+    forge_lines = ["", "[tool.forge]"]
+    for key in tunable_keys:
+        default = ForgeConfig.model_fields[key].default
+        forge_lines.append(f"{key} = {default}")
+    forge_section = "\n".join(forge_lines) + "\n"
+
+    pyproject = paths.project_root / "pyproject.toml"
     if pyproject.exists():
         content = pyproject.read_text(encoding="utf-8")
         if "[tool.forge]" not in content:
