@@ -38,6 +38,7 @@ docs/journal.md
 
 # 개인 postmortem/회고 (공유 안 함)
 docs/postmortem-*.md
+docs/handoff-*.md
 
 # 로컬 기획서·메모 (공유 안 함)
 prancy-spinning-peacock.md
