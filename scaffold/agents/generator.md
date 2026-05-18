@@ -14,12 +14,7 @@ orchestrator가 너를 호출한 상황을 다음 표에서 매칭 → 해당 �
 
 ### PATH GUARD
 
-Read 호출 시 file_path는 `.claude/`로 시작 (cwd 기준 상대). 절대 경로 금지.
-
-- 금지: `C:\Users\...`, `~/.claude/...`, `/c/Users/.../.claude/...`
-- 허용: `.claude/agent-knowledge/generator/procedure.md`
-
-호출 직전 `.claude/`로 시작 안 하면 즉시 정정.
+표 경로는 프로젝트 루트(cwd) 기준 상대 경로. 절대 경로 금지.
 
 ### Generator 매칭 표
 
