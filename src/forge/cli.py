@@ -477,46 +477,46 @@ def update_agents(
         console.print(f"\n기존 파일은 [dim]{paths.backup}[/dim]에 백업되었습니다.")
 
 
-@app.command(name="update-skills")
-def update_skills(
+@app.command(name="update-agent-knowledge")
+def update_agent_knowledge(
     root: Optional[Path] = typer.Option(None, "--root", "-r"),
     dry_run: bool = typer.Option(False, "--dry-run", help="변경 없이 대상만 출력"),
 ) -> None:
-    """설치본 scaffold의 skills/*/SKILL.md를 프로젝트 .claude/skills/로 재동기화."""
+    """설치본 scaffold의 agent-knowledge/<agent>/*.md를 프로젝트 .claude/agent-knowledge/로 재동기화."""
     paths = _paths(root)
     paths.ensure_artifacts()
     scaffold = _scaffold_dir()
-    src_root = scaffold / "skills"
+    src_root = scaffold / "agent-knowledge"
     if not src_root.exists():
-        console.print(f"[red]scaffold/skills를 찾을 수 없습니다: {src_root}[/red]")
+        console.print(f"[red]scaffold/agent-knowledge를 찾을 수 없습니다: {src_root}[/red]")
         raise typer.Exit(code=5)
 
-    target_root = paths.project_root / ".claude" / "skills"
+    target_root = paths.project_root / ".claude" / "agent-knowledge"
     target_root.mkdir(parents=True, exist_ok=True)
 
     updated: list[str] = []
-    for skill_dir in sorted(src_root.iterdir()):
-        if not skill_dir.is_dir():
+    for agent_dir in sorted(src_root.iterdir()):
+        if not agent_dir.is_dir():
             continue
-        src = skill_dir / "SKILL.md"
-        if not src.exists():
-            continue
-        dst = target_root / skill_dir.name / "SKILL.md"
-        if dst.exists() and dst.read_bytes() == src.read_bytes():
-            continue
-        if dry_run:
-            updated.append(skill_dir.name)
-            continue
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        _backup_then_copy(src, dst, paths.backup, force=True)
-        updated.append(skill_dir.name)
+        target_agent_dir = target_root / agent_dir.name
+        for src in sorted(agent_dir.glob("*.md")):
+            dst = target_agent_dir / src.name
+            if dst.exists() and dst.read_bytes() == src.read_bytes():
+                continue
+            rel = f"{agent_dir.name}/{src.name}"
+            if dry_run:
+                updated.append(rel)
+                continue
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            _backup_then_copy(src, dst, paths.backup, force=True)
+            updated.append(rel)
 
     if not updated:
-        console.print("[green]모든 skill이 최신 상태입니다.[/green]")
+        console.print("[green]모든 agent-knowledge 파일이 최신 상태입니다.[/green]")
         return
 
     verb = "갱신 예정" if dry_run else "갱신됨"
-    console.print(f"[green]{len(updated)}개 skill {verb}:[/green]")
+    console.print(f"[green]{len(updated)}개 agent-knowledge 파일 {verb}:[/green]")
     for name in updated:
         console.print(f"  • {name}")
     if not dry_run:
@@ -569,21 +569,19 @@ def _copy_scaffold(scaffold: Path, paths: ProjectPaths, force: bool) -> None:
         for src in agents_src.glob("*.md"):
             _backup_then_copy(src, agents_dst / src.name, paths.backup, force)
 
-    # forge 전용 skill (forge-mode-*, forge-*-format 등) 을 프로젝트로 복사.
-    # 에이전트 .md는 dispatch만 박혀있고 상세 prompt는 skill로 on-demand 로드.
-    skills_src = scaffold / "skills"
-    skills_dst = paths.project_root / ".claude" / "skills"
-    if skills_src.exists():
-        skills_dst.mkdir(parents=True, exist_ok=True)
-        for skill_dir in skills_src.iterdir():
-            if not skill_dir.is_dir():
+    # forge 전용 agent knowledge 파일 (5 agent × 3-5 + _shared/) 을 프로젝트로 복사.
+    # 에이전트 .md는 dispatch만 박혀있고 상세 prompt는 agent-knowledge/*.md를 Read tool로 on-demand 로드.
+    kb_src = scaffold / "agent-knowledge"
+    kb_dst = paths.project_root / ".claude" / "agent-knowledge"
+    if kb_src.exists():
+        kb_dst.mkdir(parents=True, exist_ok=True)
+        for agent_dir in kb_src.iterdir():
+            if not agent_dir.is_dir():
                 continue
-            skill_md = skill_dir / "SKILL.md"
-            if not skill_md.exists():
-                continue
-            target_skill_dir = skills_dst / skill_dir.name
-            target_skill_dir.mkdir(parents=True, exist_ok=True)
-            _backup_then_copy(skill_md, target_skill_dir / "SKILL.md", paths.backup, force)
+            target_agent_dir = kb_dst / agent_dir.name
+            target_agent_dir.mkdir(parents=True, exist_ok=True)
+            for src in agent_dir.glob("*.md"):
+                _backup_then_copy(src, target_agent_dir / src.name, paths.backup, force)
 
     tpl_dir = scaffold / "templates"
     target_tpl = paths.project_root / "templates"
