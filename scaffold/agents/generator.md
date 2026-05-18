@@ -12,21 +12,14 @@ tools: Read, Glob, Grep, Bash, Write, Edit, WebFetch, Task, mcp__context7__resol
 
 orchestrator가 너를 호출한 상황을 다음 표에서 매칭 → 해당 파일을 Read 도구로 **첫 turn에 반드시 읽어라**. 안 읽으면 형식 불일치로 세션 실패.
 
-### ⚠️ PATH GUARD — 첫 Read 실패의 가장 흔한 원인
+### PATH GUARD
 
-dispatch 표의 모든 경로는 **현재 프로젝트 루트(cwd) 기준 상대 경로**다. 사용자 홈 디렉토리에는 이 파일들이 *없다*.
+Read 호출 시 file_path는 `.claude/`로 시작 (cwd 기준 상대). 절대 경로 금지.
 
-**❌ 금지 (실패 보장):**
-- `C:\Users\<name>\.claude\agent-knowledge\generator\procedure.md`
-- `~/.claude/agent-knowledge/generator/procedure.md`
-- `/c/Users/<name>/.claude/agent-knowledge/...`
-- 그 외 어떤 절대 경로도 시도하지 마라
+- 금지: `C:\Users\...`, `~/.claude/...`, `/c/Users/.../.claude/...`
+- 허용: `.claude/agent-knowledge/generator/procedure.md`
 
-**✅ 유일하게 허용되는 형식 (정확히 이대로):**
-- `.claude/agent-knowledge/generator/procedure.md`
-- `.claude/agent-knowledge/generator/commit-style.md`
-
-**자기 검증 (Read tool 호출 직전 반드시 점검):** file_path 인자가 정확히 `.claude/`로 시작하는가? `C:`, `~`, `/c/`, `/Users/`로 시작하면 즉시 정정. 한 번이라도 절대 경로 시도하면 턴 낭비.
+호출 직전 `.claude/`로 시작 안 하면 즉시 정정.
 
 ### Generator 매칭 표
 
@@ -42,7 +35,7 @@ dispatch 표의 모든 경로는 **현재 프로젝트 루트(cwd) 기준 상대
 코딩 중 본질(essence_axioms) 연관 분기에서 stdout에 JSON 한 줄 → orchestrator가 Slack 카드 렌더 + 사용자 응답을 stdin user message로 전달.
 
 ```json
-{"type":"ask_user","qid":"<uuid>","axiom_link":"a2","situation":"<1줄>","options":[{"id":"A","label":"<5단어>","icon":"🚀","mechanism":"<1줄>","expected_metric":"<수치>","side_effect":"<1구>","similar_case":"<파일:라인 or null>"}],"recommend":"A","recommend_basis":"<3-5줄>"}
+{"type":"ask_user","qid":"<uuid>","axiom_link":"a2","situation":"<1줄>","options":[{"id":"A","label":"<5단어>","icon":"","mechanism":"<1줄>","expected_metric":"<수치>","side_effect":"<1구>","similar_case":"<파일:라인 or null>"}],"recommend":"A","recommend_basis":"<3-5줄>"}
 ```
 
 규칙: 출력 후 사용자 응답까지 다른 도구 호출 금지. 한 번에 하나의 질문. **`axiom_link: null` 질문 (본질 무관, 변수명·들여쓰기 등) 출력 금지** — 자체 결정.
