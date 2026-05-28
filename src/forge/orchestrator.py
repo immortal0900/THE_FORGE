@@ -815,6 +815,17 @@ def _run_multi_branch_sprint(
     전달). worktree 생성 자체가 실패한 경우 RuntimeError를 그대로 raise하므로
     호출자는 정상 경로에서 항상 list를 받는다.
     """
+    # _handle_parallel_sprint_finalization / _handle_parallel_sprint_escalation /
+    # _handle_replan_after_escalation 처럼 lazy import (회귀 0 보호).
+    # 함수 본문에서 호출되는 worktree/runner 심볼 모두 명시: trunk 커밋 → worktree 생성
+    # → generator/evaluator 병렬 실행 → 각 worktree 커밋 순서로 사용된다.
+    from .worktree import (
+        auto_commit_trunk_artifacts,
+        create_branch_worktrees,
+        auto_commit_worktree,
+    )
+    from .agents.runner import ParallelBranchTask, run_agents_parallel
+
     branch_ids = [s.id for s in branch_specs]
 
     notifier.notify(
@@ -1744,6 +1755,28 @@ def run_cycle(
             sprint_num = paths.current_sprint()
             sprint_tracer = SprintTracer(config, sprint_num, paths.project_name, paths.cost_log)
             _active_tracers.append(sprint_tracer)
+
+            # 가드: stale EVALUATING_DONE 복구.
+            # 사용자가 직전 sprint의 approval gate에서 /stop 보낸 뒤 forge를 다시 시작하면,
+            # checkpoint는 EVALUATING_DONE(8) 그대로지만 sprint-(N-1)-done.md 는 이미 아카이브된 상태.
+            # 모든 cp.should_run(...)이 False라 main loop가 Phase 5 validate로 직진 → _archive_sprint(sprint_num)
+            # 가 다음 sprint 번호로 호출되어 *이전 sprint의 qa-report* 를 *다음 sprint done 파일*로 복사하는
+            # 가짜 아카이브 버그가 발생한다. cp.advance(NONE)으로 정상 흐름 복귀시켜 contract 단계부터 재진입.
+            if cp.phase == Phase.EVALUATING_DONE and sprint_num >= 2:
+                prev_done = paths.sprint_done_path(sprint_num - 1)
+                if prev_done.exists():
+                    console.print(
+                        f"[yellow]stale EVALUATING_DONE 감지 — sprint-{sprint_num - 1}-done.md 이미 존재. "
+                        f"cp.advance(NONE)으로 정상 흐름 복귀 (sprint-{sprint_num} contract 단계부터 재진입).[/yellow]"
+                    )
+                    cp.advance(
+                        Phase.NONE,
+                        f"recovered from stale EVALUATING_DONE (sprint-{sprint_num - 1} already archived)",
+                    )
+                    cp.save(paths.checkpoint_file)
+                    sprint_tracer.finalize(status="skipped")
+                    _active_tracers.remove(sprint_tracer)
+                    continue
 
             # 안전장치 체크
             effective_max = max_sprints if max_sprints is not None else config.max_total_sprints
