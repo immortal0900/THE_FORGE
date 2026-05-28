@@ -10,10 +10,14 @@ from __future__ import annotations
 import logging
 import threading
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from ...config import ForgeConfig, ProjectPaths
 from ..base import NotifierAdapter
+
+if TYPE_CHECKING:
+    from slack_sdk import WebClient
+    from slack_sdk.socket_mode import SocketModeClient
 
 logger = logging.getLogger(__name__)
 
@@ -97,8 +101,8 @@ class SlackNotifier(NotifierAdapter):
         self._project_name = config.resolved_project_name(paths.project_root)
         self._emoji = config.bot_emoji or ":hammer_and_wrench:"
 
-        self._web = None
-        self._socket = None
+        self._web: Optional[WebClient] = None
+        self._socket: Optional[SocketModeClient] = None
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
 
@@ -824,12 +828,17 @@ class SlackNotifier(NotifierAdapter):
                 web_client=self._web,
             )
 
+        # Pylance 가 attribute 변이 narrowing을 못 잡아서 assert로 명시.
+        assert self._socket is not None
         self._stop_event.clear()
         self._socket.socket_mode_request_listeners.append(self._handle)
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
 
     def _run(self) -> None:
+        # threading.Thread target. start()에서 _socket 초기화 후에만 호출되므로 항상 non-None.
+        if self._socket is None:
+            return
         try:
             print(
                 f"[Slack] 🔌 Socket Mode 연결 시작 "
@@ -1096,6 +1105,8 @@ class SlackNotifier(NotifierAdapter):
 
     def _handle_view_submission(self, payload: dict) -> None:
         """revise modal 제출 처리. private_metadata로 프로젝트 필터."""
+        if self._web is None:
+            return  # adapter disabled — receiver 등록 자체가 안 됐어야 정상
         view = payload.get("view", {})
         if view.get("callback_id") != "forge_revise_submit":
             return
