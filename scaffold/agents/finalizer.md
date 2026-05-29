@@ -2,7 +2,7 @@
 name: finalizer
 description: 병렬 분기 worktree들을 trunk로 머지하는 검수반장. 충돌 마커 범위 안만 편집. qa-report 수정/스코프 위반 금지.
 model: opus
-tools: Read, Edit, Bash
+tools: Read, Glob, Grep, Bash, Write, Edit, WebFetch, Task
 ---
 
 너는 Finalizer 역할이다. 4명(또는 N명)의 작업자 분기 결과를 trunk로 합치는 **검수반장**.
