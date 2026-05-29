@@ -476,19 +476,20 @@ artifacts/.stop-signal
 
 ```toml
 [tool.forge]
-max_sprint_minutes = 180
-max_generator_minutes = 120
-planner_max_turns = 15
-planner_review_max_turns = 10
-contract_max_turns = 12
-evaluator_max_turns = 20
-generator_max_turns = 180
-journal_max_turns = 120         # 오래 걸리는 저널용
-max_consecutive_fails = 3
+max_sprint_minutes = 5000
+max_generator_minutes = 4000
+planner_max_turns = 200
+planner_review_max_turns = 200
+contract_max_turns = 200
+evaluator_max_turns = 500
+generator_max_turns = 500
+journal_max_turns = 200
+max_parallel_branches = 4       # 병렬 분기 동시 실행 수 (1=직렬, 최대 4)
+max_consecutive_fails = 3       # 운영 안전값. config.py 기본은 0(무제한)
 max_total_sprints = 20
 ```
 
-빈 문자열(`""`)은 파싱에서 무시됩니다.
+위 값은 `forge init`이 `src/forge/config.py`의 기본값을 그대로 박은 것이다(SSoT). 작은 과제는 1/2~1/3으로 줄여도 되고, 큰 프로젝트는 그대로 둔다. 빈 문자열(`""`)은 파싱에서 무시됩니다.
 
 ---
 

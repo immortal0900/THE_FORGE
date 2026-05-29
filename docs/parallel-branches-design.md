@@ -155,9 +155,11 @@ forge/                                    ← trunk 워크트리 (메인 작업 
 
 **무엇을 하나**: `config.py`의 `ForgeConfig`에 변수 2개 추가.
 
+> ⚠️ 본 설계 문서는 도입 시점 기록이다. 당시 `max_parallel_branches` 기본은 회귀 0 보호 위해 `1`(직렬)이었으나, **현재 기본값은 `4`로 변경됨** (병렬을 default 로, 직렬은 planner 판단 시에만). 최신 값은 `src/forge/config.py` 참조.
+
 ```python
-max_parallel_branches: int = 1
-# 최대 병렬 분기 수, 기본 1 (= 지금과 동일)
+max_parallel_branches: int = 1   # (도입 시점 값. 현재는 4)
+# 최대 병렬 분기 수
 
 branch_fail_escalate_threshold: int = 2
 # 한 분기가 몇 번 연속 실패하면 기획자 재호출할지
